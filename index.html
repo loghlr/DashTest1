@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <script src="https://cdn.jsdelivr.net/npm/danfojs@1.1.2/lib/bundle.min.js"></script>
+        <title>Dashboard Concept with danfo.js Test1</title>
+    </head>
+    <body>
+        <div id="plot_div"></div>
+        <script>
+            //https://googledrive.com/host/1PORpq4OXGD16ux8csLa05yvAjYlu12Ow/index.html#
+            //const infile1url = "https://raw.githubusercontent.com/plotly/datasets/master/finance-charts-apple.csv";
+            const infile1url = "https://drive.google.com/uc?export=view&id=1-51Za1SGZoT2au7IDG1h1KPZnyIiyWgv";
+            //const infile1url = 'incare_monthly.csv' ;
+            const xlim = ['2009-10-01', '2022-03-31'] ;
+            //const xlim = ['10/01/2009', '03/31/2022'] ;
+            dfd.readCSV(infile1url).then((df)=>{
+
+                const layout = {
+                    title: "Apple Financial Charts",
+                    xaxis: {
+                        autorange: true,
+                        range: xlim,
+                        rangeselector: {
+                            buttons: [{
+                                count: 12,
+                                label: '12m',
+                                step: 'month',
+                                stepmode: 'backward'
+                            }, {
+                                count: 6,
+                                label: '6m',
+                                step: 'month',
+                                stepmode: 'backward'
+                            }, {
+                                step: 'all'
+                            }]
+                        },
+                        rangeslider: {
+                            range: xlim
+                        },
+                        type: 'date',
+                        tickformat: '%m/%d/%Y'
+                    },
+                    yaxis: {
+                        title: "Count",
+                    },
+                };
+
+                const config = {
+                    //columns: ["AAPL.Open", "AAPL.High"],
+                    columns: ["Louisiana", "Alabama"],
+                 };
+let sub_df = df.iloc({rows: [0,1], columns: [0,1,2]}) ;
+sub_df.print()
+                
+                const new_df = df.setIndex({
+                    column: "Date"
+//                    column: 1
+                });
+sub_df = new_df.iloc({rows: [0,1], columns: [0,1,2]}) ;
+sub_df.print()
+                new_df.plot("plot_div").line({
+                    config,
+                    layout
+                });
+            }
+            ).catch((err)=>{
+                console.log(err);
+            }
+            );
+        </script>
+    </body>
+</html>
