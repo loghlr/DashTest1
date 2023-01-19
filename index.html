@@ -15,7 +15,9 @@
             //const infile1url = 'incare_monthly.csv' ;
             const infile1url = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/incare_monthly.csv'
             //const infile1url = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/incare_popkids.csv'
-            let xlim = null; //['2009-10-31', '2020-03-31'] ;
+            //const infile1url = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/incare_plcdaysmon_NonFamily.csv'
+            let xlim = null;
+            //['2009-10-31', '2020-03-31'] ;
             dfd.readCSV(infile1url).then((df)=>{
 
                 const layout = {
@@ -30,8 +32,8 @@
                                 step: 'month',
                                 stepmode: 'backward'
                             }, {
-                                count: 6,
-                                label: '6m',
+                                count: 24,
+                                label: '24m',
                                 step: 'month',
                                 stepmode: 'backward'
                             }, {
@@ -43,7 +45,7 @@
                         },
                         type: 'date',
                         //tickformat: '%m/%d/%Y',
-                        tickformat: '%Y-%m-%d',
+                        tickformat: '%Y-%b',
                     },
                     yaxis: {
                         title: "Count",
@@ -52,29 +54,31 @@
 
                 const config = {
                     //columns: ["AAPL.Open", "AAPL.High"],
-                    columns: ["Louisiana", "Alabama"],
-                 };
+                    columns: ["Alabama", "Louisiana"],
+                };
 
-//x=df.asType('Date','datetime',true) // file format error?
-//dfd.toDateTime(df['Date']) // works, but df['Date']=?
-//df.forEach((h) => { h.Date = Date.parse(h.Date); });
-//could fix with a regex: 2009/10/31 or 10/31/2009 both work, but 2009-10-31 is 10/30/2009 20:00? it's UTC, so gotta add time: new Date('2009-10-31T00:00')
-let x=dfd.toDateTime( df[df.columns[0]] );
-df.addColumn( 'Date', x.$dateObjectArray, {inplace: true} )
-xlim=[ df['Date'].min(), df['Date'].max() ];
-                layout.xaxis.range=xlim;
-                layout.xaxis.rangeslider.range=xlim;
-                
-let sub_df = df.iloc({rows: [0,1], columns: [0,1,2]}) ;
-sub_df.print()
-                
+                //x=df.asType('Date','datetime',true) // file format error?
+                //dfd.toDateTime(df['Date']) // works, but df['Date']=?
+                //df.forEach((h) => { h.Date = Date.parse(h.Date); });
+                //fix with regex?: 2009/10/31 or 10/31/2009 both work, but 2009-10-31 is 10/30/2009 20:00? UTC, gotta add time: new Date('2009-10-31T00:00')
+                let x = df[df.columns[0]].values;
+                if (x[0].replace(/\d/g, '').length < 2) {
+                    // [0,1] date delimiters
+                    x.forEach((n,i)=>x[i] = x[i].replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
+                }
+                let y = dfd.toDateTime(x) // cleanest? y[keys(y)[0]] rather than y.$dateObjectArray?
+
+                df.addColumn('Date', y[Object.keys(y)[0]], {inplace: true}) ;
+                xlim = [df['Date'].min(), df['Date'].max()];
+                layout.xaxis.range = xlim;
+                layout.xaxis.rangeslider.range = xlim;
+
+                //let sub_df = df.iloc({rows: [0,1], columns: [0,1,2]}) ; sub_df.print()
                 const new_df = df.setIndex({
                     column: "Date"
                 });
-
+                //sub_df = new_df.iloc({rows: [0,1], columns: [0,1,2]}) ; sub_df.print()
                 
-sub_df = new_df.iloc({rows: [0,1], columns: [0,1,2]}) ;
-sub_df.print()
                 new_df.plot("plot_div").line({
                     config,
                     layout
