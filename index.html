@@ -8,6 +8,7 @@
     </head>
     <body>
         <div id="plot_div"></div>
+        <div id="table_div" style="overflow:auto;"></div>
         <script>
             //https://googledrive.com/host/1PORpq4OXGD16ux8csLa05yvAjYlu12Ow/index.html#
             //const infile1url = "https://raw.githubusercontent.com/plotly/datasets/master/finance-charts-apple.csv";
@@ -22,6 +23,11 @@
 
                 const layout = {
                     title: "Monthly In Care",
+                        hovermode: 'x unified',
+                        modeBarButtonsToAdd: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'], //no? https://github.com/plotly/plotly.js/blob/master/src/plot_api/plot_config.js
+                        modebar_add: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'],
+                        modebaradd: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'],
+                        modebar: {add: ['v1hovermode','hovercompare']},
                     xaxis: {
                         autorange: true,
                         range: xlim,
@@ -38,10 +44,10 @@
                                 stepmode: 'backward'
                             }, {
                                 step: 'all'
-                            }]
+                            }],
                         },
                         rangeslider: {
-                            range: xlim
+                            range: xlim,
                         },
                         type: 'date',
                         //tickformat: '%m/%d/%Y',
@@ -50,11 +56,18 @@
                     yaxis: {
                         title: "Count",
                     },
+                        showlegend: true,
+                        legend: {x: 0.5, y: 1.01, orientation: 'h', xanchor: 'center', yanchor: 'bottom'},
                 };
 
                 const config = {
                     //columns: ["AAPL.Open", "AAPL.High"],
                     columns: ["Alabama", "Louisiana"],
+                        displayModeBar: 'hover',
+                        displaylogo: true,
+                        responsive: true,
+                        //modeBarButtonsToRemove: ['toImage'],
+                        //modeBarButtonsToAdd: ['v1hovermode','hovercompare','togglehover'],
                 };
 
                 //x=df.asType('Date','datetime',true) // file format error?
@@ -69,6 +82,7 @@
                 let y = dfd.toDateTime(x) // cleanest? y[keys(y)[0]] rather than y.$dateObjectArray?
 
                 df.addColumn('Date', y[Object.keys(y)[0]], {inplace: true}) ;
+                df.drop({ columns: [df.columns[0]], inplace: true });
                 xlim = [df['Date'].min(), df['Date'].max()];
                 layout.xaxis.range = xlim;
                 layout.xaxis.rangeslider.range = xlim;
@@ -82,6 +96,23 @@
                 new_df.plot("plot_div").line({
                     config,
                     layout
+                });
+                new_df.plot("table_div").table({
+                        layout: {
+                                title: infile1url,
+                                //width: 2000,
+                        },
+                        config: {
+                                tableHeaderStyle: {
+                                        line: {width: 1, color: 'black'},
+                                        fill: {color: 'gray'},
+                                        font: {color: 'white'},
+                                        columnwidth: 400, // ignored?
+                                },
+                                tableCellStyle: {
+                                        format: [','], // https://github.com/d3/d3-format/tree/v1.4.5#d3-format
+                                }
+                        },
                 });
             }
             ).catch((err)=>{
