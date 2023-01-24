@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <script src="https://cdn.jsdelivr.net/npm/danfojs@1.1.2/lib/bundle.min.js"></script>
+        <title>Dashboard Concept with danfo.js Test1</title>
+    </head>
+    <body>
+        <div id="plot_div"></div>
+        <div id="table_div" style="overflow:auto;"></div>
+        <script>
+            //==================================================
+            // utility functions:
+            Array.prototype.max = function() { // augment Arrays
+              let m = Math.max.apply(null, this);
+              if( this[0] instanceof Date ) m = new Date(m) ;
+              return(m) ;
+            };
+            Array.prototype.min = function() { // augment Arrays
+              let m = Math.min.apply(null, this);
+              if( this[0] instanceof Date ) m = new Date(m) ;
+              return(m) ;
+            };
+            Array.prototype.range = function() { // augment Arrays
+              return([this.min(), this.max()]) ;
+            }
+
+            //==================================================
+            // configuration:
+            const csvdir = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/' ;
+            const inputconfig = [ // array of objects
+                {filename: 'incare_monthly.csv', longname: 'In Foster Care Last Day of Month', shortname: 'In Care'},
+                {filename: 'incare_plcdaysmon.csv', longname: 'Child-Days in Foster Care during Month', shortname: 'Placement Child-Days'},
+                {filename: 'incare_plcdaysmon_NonFamily.csv', longname: 'Child-Days Separated from Family in Foster Care during Month', shortname: 'Separation Child-Days'},
+                {filename: 'incare_popkids.csv', longname: 'Children in the Population', shortname: 'Child Population'},
+            ] ;
+
+            //==================================================
+            // i/o:
+            let inputdata = [] ;
+            inputconfig.forEach( o => {
+                dfd.readCSV(csvdir+o.filename).then( df => {
+                    // async, so assign elements in .then
+                    // first field must always be a month, in various formats, parse into df['Date'] column:
+                    let f1 = df.columns[0] ;
+                    let x1 = df[f1].values ;
+                    if (x1[0].replace(/\d/g, '').length < 2) {
+                        // [0,1] date delimiters
+                        x1.forEach((n,i)=>x1[i] = x1[i].replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
+                    }
+                    let x2 = dfd.toDateTime(x1) // cleanest? x2[keys(x2)[0]] rather than x2.$dateObjectArray?
+
+                    df.addColumn('Date', x2[Object.keys(x2)[0]], {inplace: true}) ;
+                    df.drop({ columns: [df.columns[0]], inplace: true });
+                    df.setIndex({ column: 'Date', drop: true, inplace: true });
+                    console.log( o.shortname+': '+df.index.range() );
+                    inputdata[o.shortname] = df ;
+                }).catch((err)=>{
+                    console.log(err);
+                });
+            }) ;
+
+            //==================================================
+            // calcs:
+            let rates = [] ;
+            //Object.keys(inputdata).forEach( n => { } ) ;
+            rates['In Care'] = inputdata['In Care'].tail(1).mul(10000).div( inputdata['Child Population'].tail(1) ) ; // .tail(1) => last day
+            rates['In Care, Sorted'] = rates['In Care'].transpose().sortValues(''+rates['In Care'].index[0]).transpose() ; // sortValues col-only, so 2x transpose
+            rates['In Care, Sorted'].setIndex({ index: [new Date(rates['In Care, Sorted'].index)], inplace: true }) ; // transpose made index string, convert back
+            rates['In Care'].print() ;
+            rates['In Care, Sorted'].print() ;
+            rates['In Care, Sorted'].transpose().plot("plot_div").bar() ;
+
+            //==================================================
+            // plots:
+
+            //https://googledrive.com/host/1PORpq4OXGD16ux8csLa05yvAjYlu12Ow/index.html#
+            //const infile1url = "https://raw.githubusercontent.com/plotly/datasets/master/finance-charts-apple.csv";
+            //const infile1url = "https://drive.google.com/uc?export=view&id=1-51Za1SGZoT2au7IDG1h1KPZnyIiyWgv";
+            //const infile1url = 'incare_monthly.csv' ;
+            const infile1url = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/incare_monthly.csv'
+            //const infile1url = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/incare_popkids.csv'
+            //const infile1url = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/incare_plcdaysmon_NonFamily.csv'
+            let xlim = null;
+            //['2009-10-31', '2020-03-31'] ;
+            dfd.readCSV(infile1url).then((df)=>{
+
+                const layout = {
+                    title: "Monthly In Care",
+                        hovermode: 'x unified',
+                        modeBarButtonsToAdd: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'], //no? https://github.com/plotly/plotly.js/blob/master/src/plot_api/plot_config.js
+                        modebar_add: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'],
+                        modebaradd: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'],
+                        modebar: {add: ['v1hovermode','hovercompare']},
+                    xaxis: {
+                        autorange: true,
+                        range: xlim,
+                        rangeselector: {
+                            buttons: [{
+                                count: 12,
+                                label: '12m',
+                                step: 'month',
+                                stepmode: 'backward'
+                            }, {
+                                count: 24,
+                                label: '24m',
+                                step: 'month',
+                                stepmode: 'backward'
+                            }, {
+                                step: 'all'
+                            }],
+                        },
+                        rangeslider: {
+                            range: xlim,
+                        },
+                        type: 'date',
+                        //tickformat: '%m/%d/%Y',
+                        tickformat: '%Y-%b',
+                    },
+                    yaxis: {
+                        title: "Count",
+                    },
+                        showlegend: true,
+                        legend: {x: 0.5, y: 1.01, orientation: 'h', xanchor: 'center', yanchor: 'bottom'},
+                };
+
+                const config = {
+                    //columns: ["AAPL.Open", "AAPL.High"],
+                    columns: ["Statewide", "West Virginia", "Louisiana"],
+                        displayModeBar: 'hover',
+                        displaylogo: true,
+                        responsive: true,
+                        //modeBarButtonsToRemove: ['toImage'],
+                        //modeBarButtonsToAdd: ['v1hovermode','hovercompare','togglehover'],
+                };
+
+                //x=df.asType('Date','datetime',true) // file format error?
+                //dfd.toDateTime(df['Date']) // works, but df['Date']=?
+                //df.forEach((h) => { h.Date = Date.parse(h.Date); });
+                //fix with regex?: 2009/10/31 or 10/31/2009 both work, but 2009-10-31 is 10/30/2009 20:00? UTC, gotta add time: new Date('2009-10-31T00:00')
+                let x = df[df.columns[0]].values;
+                if (x[0].replace(/\d/g, '').length < 2) {
+                    // [0,1] date delimiters
+                    x.forEach((n,i)=>x[i] = x[i].replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
+                }
+                let y = dfd.toDateTime(x) // cleanest? y[keys(y)[0]] rather than y.$dateObjectArray?
+
+                df.addColumn('Date', y[Object.keys(y)[0]], {inplace: true}) ;
+                df.drop({ columns: [df.columns[0]], inplace: true });
+                xlim = [df['Date'].min(), df['Date'].max()];
+                layout.xaxis.range = xlim;
+                layout.xaxis.rangeslider.range = xlim;
+
+                //let sub_df = df.iloc({rows: [0,1], columns: [0,1,2]}) ; sub_df.print()
+                const new_df = df.setIndex({
+                    column: "Date"
+                });
+                //sub_df = new_df.iloc({rows: [0,1], columns: [0,1,2]}) ; sub_df.print()
+                
+                new_df.plot("plot_div").line({
+                    config,
+                    layout
+                });
+                new_df.plot("table_div").table({
+                        layout: {
+                                title: infile1url,
+                                //width: 2000,
+                        },
+                        config: {
+                                tableHeaderStyle: {
+                                        line: {width: 1, color: 'black'},
+                                        fill: {color: 'gray'},
+                                        font: {color: 'white'},
+                                        columnwidth: 400, // ignored?
+                                },
+                                tableCellStyle: {
+                                        format: [','], // https://github.com/d3/d3-format/tree/v1.4.5#d3-format
+                                }
+                        },
+                });
+            }
+            ).catch((err)=>{
+                console.log(err);
+            }
+            );
+        </script>
+    </body>
+</html>

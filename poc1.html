@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <script src="https://cdn.jsdelivr.net/npm/danfojs@1.1.2/lib/bundle.min.js"></script>
+        <title>Dashboard Concept with danfo.js Test1</title>
+        <style>
+            label { white-space: nowrap; }
+        </style>
+    </head>
+    <body>
+        <div id="config.div">
+            <label for="num.select">Metric: <select id="num.select" onchange="numselectcb(this.selectedOptions[0].value)"></select></label>
+            <label for="count">Type:
+            <input type="radio" id="count" name="den.select" value="count" onchange="denselectcb(this.value)"><label for="count">Count</label>
+            <input type="radio" id="rate" name="den.select" value="rate" onchange="denselectcb(this.value)" checked><label for="rate">Rate Per 10k</label>
+            <input type="radio" id="percent" name="den.select" onchange="denselectcb(this.value)" value="percent"><label for="percent">% of US Rate</label>
+            </label>
+        </div>
+        <div id="rankbars.div"></div>
+        <div id="timeseries.div" xstyle="overflow:auto;"></div>
+        <script>
+            //==================================================
+            // utility functions:
+            Array.prototype.max = function() { // augment Arrays
+              let m = Math.max.apply(null, this);
+              if( this[0] instanceof Date ) m = new Date(m) ;
+              return(m) ;
+            };
+            Array.prototype.min = function() { // augment Arrays
+              let m = Math.min.apply(null, this);
+              if( this[0] instanceof Date ) m = new Date(m) ;
+              return(m) ;
+            };
+            Array.prototype.range = function() { // augment Arrays
+              return([this.min(), this.max()]) ;
+            }
+            Array.prototype.tail = function(n) { // like R/Pandas
+              return(this.slice(this.length-n)) ;
+            }
+
+            //==================================================
+            // configuration:
+            const csvdir = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/' ;
+            var inputconfig = [ // array of objects iterable
+                {filename: 'incare_plcdaysmon_NonFamily.csv', longname: 'Child-Days Separated from Family in Foster Care during Month', shortname: 'Separation Child-Days'},
+                {filename: 'incare_plcdaysmon.csv', longname: 'Child-Days in Foster Care during Month', shortname: 'Placement Child-Days'},
+                {filename: 'incare_monthly.csv', longname: 'In Foster Care Last Day of Month', shortname: 'In Care'},
+                {filename: 'incare_popkids.csv', longname: 'Children in the Population', shortname: 'Child Population'},
+            ] ;
+            // init
+            inputconfig.numtype = inputconfig[2].shortname ;
+            inputconfig.dentype = inputconfig.tail(1)[0].shortname ;
+            inputconfig.selregions = ['51 US States'] ;
+            // populate metric/numerator select list options
+            inputconfig.forEach( o => {
+                let e = document.createElement('option') ;
+                e.textContent = o.longname ;
+                e.value = o.shortname ;
+                e.selected = (o.shortname == inputconfig.numtype) ;
+                document.getElementById('num.select').add(e) ;
+            } ) ;
+
+            //==================================================
+            // UI callbacks:
+            function numselectcb( num ) {
+                console.log(num+' selected.')
+                inputconfig.numtype = num ;
+            }
+            function denselectcb( den ) {
+                console.log(den+' pressed.')
+                inputconfig.dentype = den ;
+            }
+
+            //==================================================
+            // i/o:
+            /*
+            let inputdata = {} ;
+            let inputpromises = inputconfig.map( o => dfd.readCSV(csvdir+o.filename) ) ;
+            console.log(inputpromises);
+            */
+
+            /*
+            let inputdata = inputconfig.map( o => {
+                dfd.readCSV(csvdir+o.filename).then( df => {
+                    return(df) ;
+                }) ;
+            }) ;
+            //let inputdata = inputconfig.map( o => dfd.readCSV(csvdir+o.filename).resolve() )
+            console.log(inputdata);
+            console.log(typeof inputdata[0]);
+            */
+// works in console, but not reload: inputdata['In Care'] = parsefcicsv( await dfd.readCSV(csvdir+'incare_monthly.csv') ) ;
+
+            let inputdata = {}, inputpromises = {}, rates = [] ;
+            function parsefcicsv( df ) {
+                // async, so assign elements in .then
+                // first field must always be a month, in various formats, parse into df['Date'] column:
+                let f1 = df.columns[0] ;
+                let x1 = df[f1].values ;
+                if (x1[0].replace(/\d/g, '').length < 2) {
+                    // [0,1] date delimiters
+                    x1.forEach((n,i)=>x1[i] = x1[i].replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
+                }
+                let x2 = dfd.toDateTime(x1) // cleanest? x2[keys(x2)[0]] rather than x2.$dateObjectArray?
+
+                df.addColumn('Date', x2[Object.keys(x2)[0]], {inplace: true}) ;
+                df.drop({ columns: [df.columns[0]], inplace: true });
+                df.setIndex({ column: 'Date', drop: true, inplace: true });
+
+                df.rename({ 'Statewide': '51 US States' }, { inplace: true }) ;
+                df.rename({ 'National': '51 US States' }, { inplace: true }) ;
+                return(df) ;
+                //console.log( o.shortname+': '+df.index.range() );
+                //inputdata[o.shortname] = df ;
+            } ;
+            inputconfig.forEach( o => {
+                inputpromises[o.shortname] = dfd.readCSV(csvdir+o.filename).then( df0 => {
+                    df = parsefcicsv(df0) ;
+                    inputdata[o.shortname] = df ;
+                    //console.log( o.shortname+': '+df.index.range() );
+                }).catch( err => alert('File Read Error: '+err) );
+            }) ;
+            console.log(inputpromises);
+            console.log( Object.keys(inputpromises) ) ;
+
+Promise.all([inputpromises['In Care'], inputpromises['Child Population']]).then( o => {
+    console.log(o) ;
+    console.log(inputdata['In Care']);
+    console.log(inputdata['Child Population']);
+
+
+            //==================================================
+            // calcs:
+            //Object.keys(inputdata).forEach( n => { } ) ;
+            console.log( Object.keys(inputdata) ) ;
+            rates['In Care'] = inputdata['In Care'].mul(10000).div( inputdata['Child Population'] ).round(1) ;
+            rates['In Care, Sorted'] = rates['In Care'].tail(1).transpose().sortValues(''+rates['In Care'].index.tail(1)).transpose() ; // sortValues col-only, so 2x transpose. .tail(1) to sort by last day
+            rates['In Care, Sorted'].setIndex({ index: [new Date(rates['In Care, Sorted'].index)], inplace: true }) ; // transpose made index string, convert back
+            rates['In Care'].print() ;
+            rates['In Care, Sorted'].print() ;
+
+            //==================================================
+            // plots:
+            let xlim = rates['In Care'].index.range() ;
+            layout.xaxis.range = xlim;
+            layout.xaxis.rangeslider.range = xlim;
+            rates['In Care, Sorted'].transpose().plot('rankbars.div').bar({
+                config: {
+                    responsive: true,
+                },
+                layout: {
+                    title: 'US States Sorted: Monthly in Care Rates',
+                    yaxis: {
+                        title: 'Rate per 10,000 Children in Population',
+                    },
+                    hovermode: 'closest',
+                    clickmode: 'event+select',
+                    dragmode: false,
+                    activeselection: { // nothing?
+                        fillcolor: 'rgba(1,0,0,0.5)',
+                        opacity: 1,
+                    },
+                }
+            }) ;
+            rates['In Care'].plot('timeseries.div').line({
+                config,
+                layout
+            }) ;
+
+            var rankbarsplot = document.getElementById('rankbars.div') ;
+            // not right, need the plot's selection array ...
+            rankbarsplot.on( 'plotly_click', (d) => {
+                let l = d.points[0].label ;
+                // if it's in selregions already, pop it, else push it
+                let x = inputconfig.selregions.filter( s =>  s != l ) ;
+                if( x.length == inputconfig.selregions ) {
+                    inputconfig.selregions.push(l) ;
+                } else {
+                    inputconfig.selregions = x ;
+                }
+                console.log( l+', '+inputconfig.selregions ) ;
+            } ) ;
+            // plotly_selected triggers on drag events.
+
+}).catch( err => alert('Calc/Plot Error: '+err) );
+console.log( Object.keys(inputdata) ) ;
+
+                const layout = {
+                    title: 'Monthly In Care Rate over Time',
+                        hovermode: 'x unified',
+                        modeBarButtonsToAdd: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'], //no? https://github.com/plotly/plotly.js/blob/master/src/plot_api/plot_config.js
+                        modebar_add: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'],
+                        modebaradd: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'],
+                        modebar: {add: ['v1hovermode','hovercompare']},
+                    xaxis: {
+                        autorange: true,
+                        range: null,
+                        rangeselector: {
+                            buttons: [{
+                                count: 12,
+                                label: '12m',
+                                step: 'month',
+                                stepmode: 'backward'
+                            }, {
+                                count: 24,
+                                label: '24m',
+                                step: 'month',
+                                stepmode: 'backward'
+                            }, {
+                                step: 'all'
+                            }],
+                        },
+                        rangeslider: {
+                            range: null,
+                        },
+                        type: 'date',
+                        //tickformat: '%m/%d/%Y',
+                        tickformat: '%Y-%b',
+                    },
+                    yaxis: {
+                        title: 'Rate per 10,000 Children in Population',
+                    },
+                        showlegend: true,
+                        legend: {x: 0.5, y: 1.10, orientation: 'h', xanchor: 'center', yanchor: 'bottom'},
+                };
+
+                const config = {
+                    columns: ['51 US States', 'California', 'Georgia'],
+                        displayModeBar: 'hover',
+                        displaylogo: true,
+                        responsive: true,
+                        //modeBarButtonsToRemove: ['toImage'],
+                        //modeBarButtonsToAdd: ['v1hovermode','hovercompare','togglehover'],
+                };
+/*
+
+                //x=df.asType('Date','datetime',true) // file format error?
+                //dfd.toDateTime(df['Date']) // works, but df['Date']=?
+                //df.forEach((h) => { h.Date = Date.parse(h.Date); });
+                //fix with regex?: 2009/10/31 or 10/31/2009 both work, but 2009-10-31 is 10/30/2009 20:00? UTC, gotta add time: new Date('2009-10-31T00:00')
+                let x = df[df.columns[0]].values;
+                if (x[0].replace(/\d/g, '').length < 2) {
+                    // [0,1] date delimiters
+                    x.forEach((n,i)=>x[i] = x[i].replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
+                }
+                let y = dfd.toDateTime(x) // cleanest? y[keys(y)[0]] rather than y.$dateObjectArray?
+
+                df.addColumn('Date', y[Object.keys(y)[0]], {inplace: true}) ;
+                df.drop({ columns: [df.columns[0]], inplace: true });
+                xlim = [df['Date'].min(), df['Date'].max()];
+                layout.xaxis.range = xlim;
+                layout.xaxis.rangeslider.range = xlim;
+
+                //let sub_df = df.iloc({rows: [0,1], columns: [0,1,2]}) ; sub_df.print()
+                const new_df = df.setIndex({
+                    column: "Date"
+                });
+                //sub_df = new_df.iloc({rows: [0,1], columns: [0,1,2]}) ; sub_df.print()
+                
+                new_df.plot("plot_div").line({
+                    config,
+                    layout
+                });
+                new_df.plot("table_div").table({
+                        layout: {
+                                title: infile1url,
+                                //width: 2000,
+                        },
+                        config: {
+                                tableHeaderStyle: {
+                                        line: {width: 1, color: 'black'},
+                                        fill: {color: 'gray'},
+                                        font: {color: 'white'},
+                                        columnwidth: 400, // ignored?
+                                },
+                                tableCellStyle: {
+                                        format: [','], // https://github.com/d3/d3-format/tree/v1.4.5#d3-format
+                                }
+                        },
+                });
+            }
+*/
+        </script>
+    </body>
+</html>
