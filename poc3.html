@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Dashboard Concept with danfo.js+dc.js Test3</title>
+        <style>
+            label { white-space: nowrap; }
+            #rankbarsdiv .axis.x .tick text { //http://dc-js.github.io/dc.js/examples/focus-ordinal-bar.html
+                text-anchor: end;
+                transform: rotate(-90deg) translate(-5em,-1.3em);
+            }
+        </style>
+<link rel="stylesheet" type="text/css" href="http://dc-js.github.io/dc.js/css/bootstrap.min.css">
+<link rel="stylesheet" type="text/css" href="http://dc-js.github.io/dc.js/css/dc.css"/>
+
+    </head>
+    <body>
+<div class="container">
+<xscript type="text/javascript" src="http://dc-js.github.io/dc.js/examples/header.js"></script>
+<div id="test"></div>
+
+<script type="text/javascript" src="http://dc-js.github.io/dc.js/js/d3.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/danfojs@1.1.2/lib/bundle.min.js"></script>
+<script type="text/javascript" src="http://dc-js.github.io/dc.js/js/crossfilter.js"></script>
+<script type="text/javascript" src="http://dc-js.github.io/dc.js/js/dc.js"></script>
+
+<!--
+-->
+	<p>This page is running dc.js version <span id="version"></span></p>
+        <div id="configdiv">
+            <label for="num.select">Metric: <select id="num.select" onchange="numselectcb(this.selectedOptions[0].value)"></select></label>
+            <label for="count">Type:
+            <input type="radio" id="count" name="den.select" value="count" onchange="denselectcb(this.value)"><label for="count">Count</label>
+            <input type="radio" id="rate" name="den.select" value="rate" onchange="denselectcb(this.value)" checked><label for="rate">Rate Per 10k</label>
+            <input type="radio" id="percent" name="den.select" onchange="denselectcb(this.value)" value="percent"><label for="percent">% of US Rate</label>
+            </label>
+        </div>
+        <div id="rankbarsdiv">
+            <div class="title">States Ranked
+                <a class="reset" href="javascript:rankchart.filterAll();dc.redrawAll();" style="visibility: hidden;">reset</a>
+            </div>
+        </div>
+        <div id="timeseriesdiv" xstyle="overflow:auto;"></div>
+        <div id="chartdiv"></div>
+
+<script type="text/javascript">
+var counts = [
+  {name: "apple", cnt: 10},
+  {name: "orange", cnt: 15},
+  {name: "banana", cnt: 12},
+  {name: "grapefruit", cnt: 2},
+  {name: "grapefruit", cnt: 4}
+];
+
+var ndx            = crossfilter(counts),
+    fruitDimension = ndx.dimension(function(d) {return d.name;}),
+    sumGroup       = fruitDimension.group().reduceSum(function(d) {return d.cnt;});
+
+//var chart = new dc.BarChart( '#chartdiv' )
+var chart = new dc.BarChart( '#chartdiv' )
+  .width(768)
+  .height(280)
+  .x(d3.scaleBand())
+  .xUnits(dc.units.ordinal)
+  .brushOn(false)
+  .xAxisLabel("Fruit")
+  .yAxisLabel("Quantity Sold")
+  .barPadding(0.1)
+  .outerPadding(0.05)
+  .dimension(fruitDimension)
+  .group(sumGroup);
+chart.render() ;
+
+            //==================================================
+            // utility functions:
+            Array.prototype.max = function() { // augment Arrays
+              let m = Math.max.apply(null, this);
+              if( this[0] instanceof Date ) m = new Date(m) ;
+              return(m) ;
+            };
+            Array.prototype.min = function() { // augment Arrays
+              let m = Math.min.apply(null, this);
+              if( this[0] instanceof Date ) m = new Date(m) ;
+              return(m) ;
+            };
+            Array.prototype.range = function() { // augment Arrays
+              return([this.min(), this.max()]) ;
+            }
+            Array.prototype.tail = function(n) { // like R/Pandas
+              return(this.slice(this.length-n)) ;
+            }
+
+            //==================================================
+            // globals
+            var dc1, cf1, rankchart ;
+
+            //==================================================
+            // configuration:
+            const csvdir = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/' ;
+            var inputconfig = [ // array of objects iterable
+                {filename: 'incare_plcdaysmon_NonFamily.csv', longname: 'Child-Days Separated from Family in Foster Care during Month', shortname: 'Separation Child-Days'},
+                {filename: 'incare_plcdaysmon_NonFamily_Maj.csv', longname: 'Child-Days Majority-Race Separated from Family in Foster Care during Month', shortname: 'Majority-Race Separation Child-Days'},
+                {filename: 'incare_plcdaysmon_NonFamily_NonMaj.csv', longname: 'Child-Days NonMajority-Race Separated from Family in Foster Care during Month', shortname: 'NonMajority-Race Separation Child-Days'},
+                {filename: 'incare_plcdaysmon.csv', longname: 'Child-Days in Foster Care during Month', shortname: 'Placement Child-Days'},
+                {filename: 'incare_monthly.csv', longname: 'In Foster Care Last Day of Month', shortname: 'In Care'},
+                {filename: 'removals_monthly.csv', longname: 'Removals to Foster Care during Month', shortname: 'Removals'},
+                {filename: 'incare_popkids.csv', longname: 'Children in the Population', shortname: 'Child Population'},
+            ] ;
+            // init
+            inputconfig.numtype = inputconfig[2].shortname ;
+            inputconfig.dentype = inputconfig.tail(1)[0].shortname ;
+            inputconfig.selregions = ['51 US States'] ;
+            // populate metric/numerator select list options
+            inputconfig.forEach( o => {
+                let e = document.createElement('option') ;
+                e.textContent = o.longname ;
+                e.value = o.shortname ;
+                e.selected = (o.shortname == inputconfig.numtype) ;
+                document.getElementById('num.select').add(e) ;
+            } ) ;
+
+            //==================================================
+            // UI callbacks:
+            function numselectcb( num ) {
+                console.log(num+' selected.')
+                inputconfig.numtype = num ;
+            }
+            function denselectcb( den ) {
+                console.log(den+' pressed.')
+                inputconfig.dentype = den ;
+            }
+
+            //==================================================
+            // works in console, but not in file: inputdata['In Care'] = parsefcicsv( await dfd.readCSV(csvdir+'incare_monthly.csv') ) ;
+            let inputdata = {}, inputpromises = {}, rates = [] ;
+            function parsefcicsv( df ) {
+                // async, so assign elements in .then
+                // first field must always be a month, in various formats, parse into df['Date'] column:
+                let f1 = df.columns[0] ;
+                let x1 = df[f1].values ;
+                if (x1[0].replace(/\d/g, '').length < 2) {
+                    // [0,1] date delimiters
+                    x1.forEach((n,i)=>x1[i] = x1[i].replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
+                }
+                let x2 = dfd.toDateTime(x1) // cleanest? x2[keys(x2)[0]] rather than x2.$dateObjectArray?
+
+                df.addColumn('Date', x2[Object.keys(x2)[0]], {inplace: true}) ;
+                df.drop({ columns: [df.columns[0]], inplace: true });
+                df.setIndex({ column: 'Date', drop: true, inplace: true });
+
+                df.rename({ 'Statewide': '51 US States' }, { inplace: true }) ;
+                df.rename({ 'National': '51 US States' }, { inplace: true }) ;
+                return(df) ;
+                //console.log( o.shortname+': '+df.index.range() );
+                //inputdata[o.shortname] = df ;
+            } ;
+            // create promises for file downloads:
+            inputconfig.forEach( o => {
+                inputpromises[o.shortname] = dfd.readCSV(csvdir+o.filename).then( df0 => {
+                    df = parsefcicsv(df0) ;
+                    inputdata[o.shortname] = df ;
+                    //console.log( o.shortname+': '+df.index.range() );
+                }).catch( err => alert('File Read Error: '+err) );
+            }) ;
+            console.log(inputpromises);
+            console.log( Object.keys(inputpromises) ) ;
+
+Promise.all([inputpromises['In Care'], inputpromises['Child Population']]).then( o => {
+    console.log(o) ;
+    console.log(inputdata['In Care']);
+    console.log(inputdata['Child Population']);
+
+
+            //==================================================
+            // reformat for crosstabs.js
+            let date2mon = d3.timeFormat( '%Y-%b' ) ;
+            function flattendf( df1, colname, template=null ) {
+//df1=inputdata['Child Population']; colname='Child Population' ;
+//df1=inputdata['In Care']; colname='In Care'; template=dc1 ;
+                let vals = df1.values, rows=df1.index, cols=df1.columns ;
+//console.log( vals[0][0], template[0] )
+                let it = 0 ;
+                let x1 = vals.map( (r,ir) => {
+//ir=0, r=vals[ir] ;
+                    let rn = date2mon(rows[ir]) ;
+                    let x2 = r.map( (c,ic) => {
+//ic=0, c=r[ic] ;
+                        let cell;
+                        if( template !== null ) {
+                            if( template[it].month == rn && template[it].region == cols[ic] ) {
+                                cell = template[it] ;
+                            } else {
+//                                throw new Error( 'month/region mismatch' ) ;
+                                console.log( 'month/region mismatch: $ir, $ic, $ir2' ) ;
+                            }
+                            it++ ;
+                        } else {
+                            cell = { month: rn, region: cols[ic] } ; 
+                        }
+                        cell[colname] = c ;
+                        return( cell ) ;
+                    } ) ;
+                    return( x2 ) ;
+                 } ) ;
+//console.log( x1.length, template );
+                return(x1.flat(1)) ;
+            }
+            dc1 = flattendf( inputdata['Child Population'], 'Child Population' ) ;
+            x1 = flattendf( inputdata['In Care'], 'In Care', dc1 ) ;
+            cf1 = crossfilter( x1 ) ;
+            //const cf1_all = cf1.groupAll() ;
+            const cf1dmonthly = cf1.dimension( r => r.month ) ;
+            const cf1dincarerate = cf1.dimension( r => Math.round(10000*r['In Care'] / r['Child Population'],1) ) ;
+            const cf1gmonthly = cf1dmonthly.group().reduceSum( r => r['In Care'] )
+            const cf1dregion = cf1.dimension( r => r.region ) ;
+            const cf1gregion = cf1dregion.group().reduceSum( r => 10*r['In Care'] / r['Child Population'] )
+//https://stackoverflow.com/questions/43000194/clicking-on-rowchart-dc-js-changes-the-percentage, https://jsfiddle.net/gordonwoodhull/5xc9rh4f/1/
+function reduceAdd(p, v) {
+  ++p.count;
+  p.num += v['In Care'];
+  p.den += v['Child Population'];
+  return p;
+}
+function reduceRemove(p, v) {
+  --p.count;
+  p.num -= v['In Care'];
+  p.den -= v['Child Population'];
+  return p;
+}
+function reduceInitial() {
+  return {count: 0, num: 0, den: 0, quo: 0};
+}
+const cf1gregionrate = cf1dregion.group().reduce(reduceAdd, reduceRemove, reduceInitial);
+
+            //==================================================
+            // plots:
+            rankchart = new dc.BarChart( '#rankbarsdiv' ) ;
+            rankchart
+                .dimension(cf1dregion)
+                .group(cf1gregionrate)
+                .valueAccessor(function(p) { 
+                    p.value.quo = p.value.num/p.value.den ;
+                    return Math.round(10000*p.value.quo,1); 
+                })
+                .ordering( r => r.value.quo )
+//                .width(768)
+                .height(300)
+                .margins({left: 35, top: 10, right: 10, bottom: 120})
+                .x(d3.scaleBand())
+                .xUnits(dc.units.ordinal)
+                .brushOn(false)
+                .controlsUseVisibility(true)
+                .xAxisLabel("State")
+                .yAxisLabel("In Care Rate")
+                .barPadding(0.1)
+                .outerPadding(.2)
+                .elasticX(true)
+                .elasticY(true)
+                .yAxisPadding('10%')
+                .renderLabel(true)
+                //.mouseZoomable(true) // x.invert is not a function?
+                //.zoomScale([4,8])
+                //.xAxis().orient('top')
+            ;
+            rankchart.yAxis().tickFormat(d3.format(',.2r')) ;
+            //nothing: rankchart.xAxis().tickArguments([{orient: 'top'}]) ;
+rankchart.render() ;
+/*
+            dc.renderAll(); // causes xaxis error, which is really '#div' error.
+            //==================================================
+            // calcs:
+            //Object.keys(inputdata).forEach( n => { } ) ;
+            console.log( Object.keys(inputdata) ) ;
+            rates['In Care'] = inputdata['In Care'].mul(10000).div( inputdata['Child Population'] ).round(1) ;
+            rates['In Care, Sorted'] = rates['In Care'].tail(1).transpose().sortValues(''+rates['In Care'].index.tail(1)).transpose() ; // sortValues col-only, so 2x transpose. .tail(1) to sort by last day
+            rates['In Care, Sorted'].setIndex({ index: [new Date(rates['In Care, Sorted'].index)], inplace: true }) ; // transpose made index string, convert back
+            rates['In Care'].print() ;
+            rates['In Care, Sorted'].print() ;
+
+            //==================================================
+            // plots:
+            let xlim = rates['In Care'].index.range() ;
+            layout.xaxis.range = xlim;
+            layout.xaxis.rangeslider.range = xlim;
+            rates['In Care, Sorted'].transpose().plot('rankbarsdiv').bar({
+                config: {
+                    responsive: true,
+                },
+                layout: {
+                    title: 'US States Sorted: Monthly in Care Rates',
+                    yaxis: {
+                        title: 'Rate per 10,000 Children in Population',
+                    },
+                    hovermode: 'closest',
+                    clickmode: 'event+select',
+                    dragmode: false,
+                    activeselection: { // nothing?
+                        fillcolor: 'rgba(1,0,0,0.5)',
+                        opacity: 1,
+                    },
+                }
+            }) ;
+            rates['In Care'].plot('timeseriesdiv').line({
+                config,
+                layout
+            }) ;
+
+            var rankbarsplot = document.getElementById('rankbarsdiv') ;
+            // not right, need the plot's selection array ...
+            rankbarsplot.on( 'plotly_click', (d) => {
+                let l = d.points[0].label ;
+                // if it's in selregions already, pop it, else push it
+                let x = inputconfig.selregions.filter( s =>  s != l ) ;
+                if( x.length == inputconfig.selregions ) {
+                    inputconfig.selregions.push(l) ;
+                } else {
+                    inputconfig.selregions = x ;
+                }
+                console.log( l+', '+inputconfig.selregions ) ;
+            } ) ;
+            // plotly_selected triggers on drag events.
+*/
+
+}).catch( err => alert('Calc/Plot Error: '+err) );
+	console.log( Object.keys(inputdata) ) ;
+	d3.selectAll('#version').text(dc.version);
+
+                const layout = {
+                    title: 'Monthly In Care Rate over Time',
+                        hovermode: 'x unified',
+                        modeBarButtonsToAdd: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'], //no? https://github.com/plotly/plotly.js/blob/master/src/plot_api/plot_config.js
+                        modebar_add: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'],
+                        modebaradd: ['v1hovermode','hovercompare','togglehover','hoverCompareCartesian'],
+                        modebar: {add: ['v1hovermode','hovercompare']},
+                    xaxis: {
+                        autorange: true,
+                        range: null,
+                        rangeselector: {
+                            buttons: [{
+                                count: 12,
+                                label: '12m',
+                                step: 'month',
+                                stepmode: 'backward'
+                            }, {
+                                count: 24,
+                                label: '24m',
+                                step: 'month',
+                                stepmode: 'backward'
+                            }, {
+                                step: 'all'
+                            }],
+                        },
+                        rangeslider: {
+                            range: null,
+                        },
+                        type: 'date',
+                        //tickformat: '%m/%d/%Y',
+                        tickformat: '%Y-%b',
+                    },
+                    yaxis: {
+                        title: 'Rate per 10,000 Children in Population',
+                    },
+                        showlegend: true,
+                        legend: {x: 0.5, y: 1.10, orientation: 'h', xanchor: 'center', yanchor: 'bottom'},
+                };
+
+                const config = {
+                    columns: ['51 US States', 'California', 'Georgia'],
+                        displayModeBar: 'hover',
+                        displaylogo: true,
+                        responsive: true,
+                        //modeBarButtonsToRemove: ['toImage'],
+                        //modeBarButtonsToAdd: ['v1hovermode','hovercompare','togglehover'],
+                };
+/*
+
+                //x=df.asType('Date','datetime',true) // file format error?
+                //dfd.toDateTime(df['Date']) // works, but df['Date']=?
+                //df.forEach((h) => { h.Date = Date.parse(h.Date); });
+                //fix with regex?: 2009/10/31 or 10/31/2009 both work, but 2009-10-31 is 10/30/2009 20:00? UTC, gotta add time: new Date('2009-10-31T00:00')
+                let x = df[df.columns[0]].values;
+                if (x[0].replace(/\d/g, '').length < 2) {
+                    // [0,1] date delimiters
+                    x.forEach((n,i)=>x[i] = x[i].replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
+                }
+                let y = dfd.toDateTime(x) // cleanest? y[keys(y)[0]] rather than y.$dateObjectArray?
+
+                df.addColumn('Date', y[Object.keys(y)[0]], {inplace: true}) ;
+                df.drop({ columns: [df.columns[0]], inplace: true });
+                xlim = [df['Date'].min(), df['Date'].max()];
+                layout.xaxis.range = xlim;
+                layout.xaxis.rangeslider.range = xlim;
+
+                //let sub_df = df.iloc({rows: [0,1], columns: [0,1,2]}) ; sub_df.print()
+                const new_df = df.setIndex({
+                    column: "Date"
+                });
+                //sub_df = new_df.iloc({rows: [0,1], columns: [0,1,2]}) ; sub_df.print()
+                
+                new_df.plot("plot_div").line({
+                    config,
+                    layout
+                });
+                new_df.plot("table_div").table({
+                        layout: {
+                                title: infile1url,
+                                //width: 2000,
+                        },
+                        config: {
+                                tableHeaderStyle: {
+                                        line: {width: 1, color: 'black'},
+                                        fill: {color: 'gray'},
+                                        font: {color: 'white'},
+                                        columnwidth: 400, // ignored?
+                                },
+                                tableCellStyle: {
+                                        format: [','], // https://github.com/d3/d3-format/tree/v1.4.5#d3-format
+                                }
+                        },
+                });
+            }
+*/
+        </script>
+    </body>
+</html>
