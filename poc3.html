@@ -6,9 +6,9 @@
         <title>Dashboard Concept with danfo.js+dc.js Test3</title>
         <style>
             label { white-space: nowrap; }
-            #rankbarsdiv .axis.x .tick text { //http://dc-js.github.io/dc.js/examples/focus-ordinal-bar.html
+            #rankbarsdiv .axis.x .tick text { /*http://dc-js.github.io/dc.js/examples/focus-ordinal-bar.html*/
                 text-anchor: end;
-                transform: rotate(-90deg) translate(-5em,-1.3em);
+                transform: rotate(-80deg) translate(-1em,-1.3em);
             }
         </style>
     </head>
@@ -209,7 +209,6 @@
                 return Math.round(10000*p.value.quo,1); 
             })
             .ordering( r => r.value.quo )
-    //                .width(768)
             .height(300)
             .margins({left: 35, top: 10, right: 10, bottom: 120})
             .x(d3.scaleBand())
@@ -223,15 +222,16 @@
             .elasticX(true)
             .elasticY(true)
             .yAxisPadding('10%')
-            .renderLabel(true)
+            .renderLabel(false)
+            //.width(768)
             //.mouseZoomable(true) // x.invert is not a function?
             //.zoomScale([4,8])
             //.xAxis().orient('top')
         ;
         rankchart.yAxis().tickFormat(d3.format(',.2r')) ;
         //nothing: rankchart.xAxis().tickArguments([{orient: 'top'}]) ;
-        rankchart.render() ;
-        //dc.renderAll(); // causes xaxis error, which is really '#div' error.
+        //works: rankchart.render() ;
+        dc.renderAll(); // can cause xaxis error, which is really '#div' error.
 
     }).catch( err => alert('Calc/Plot Error: '+err) );
     console.log( Object.keys(inputdata) ) ;
