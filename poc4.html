@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<!-- abb 2/1/2023: try pure crossfilter/dc/d3 ecosystem, starting from series (multi-line) focus (responds to external filters) chart paired with a series range (always shows full range) chart (https://dc-js.github.io/dc.js/examples/range-series.html) switched to a ranked bar focus chart instead? -->
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Dashboard Concept with crossfilter/dc/d3 Test4</title>
+        <!-- need dc.css for barchart selection -->
+        <link rel="stylesheet" type="text/css" href="http://dc-js.github.io/dc.js/css/dc.css"/>
+        <style>
+            label { white-space: nowrap; }
+            #rankbarsdiv .axis.x .tick text { /*http://dc-js.github.io/dc.js/examples/focus-ordinal-bar.html*/
+                text-anchor: end;
+                transform: rotate(-80deg) translate(-1em,-1.3em);
+            }
+        </style>
+    </head>
+    <body>
+
+<!--
+-->
+<p>Running
+crossfilter.js v<span id="crossfilterversion"></span>,
+d3.js v<span id="d3version"></span>,
+dc.js v<span id="dcversion"></span>.
+</p>
+<div id="focuschartdiv">
+    <div class="title">State Time Series</div>
+    <div id="focuslegend" class="dc-html-legend-container"></div>
+</div>
+<div id="rangechartdiv">
+<a class="reset" style="visibility: hidden; float: right;" href="javascript:rangeChart.filterAll(); dc.redrawAll()">reset</a>
+</div>
+<button class="btn" onclick="javascript:load_it(csvfiles[1]);" selected>incare_monthly.csv</button>
+<button class="btn" onclick="javascript:load_it(csvfiles[2]);">incare_plcdaysmon_NonFamily.csv</button>
+
+<script type="text/javascript" src="https://dc-js.github.io/dc.js/js/d3.js"></script>
+<script type="text/javascript" src="https://dc-js.github.io/dc.js/js/crossfilter.js"></script>
+<script type="text/javascript" src="https://dc-js.github.io/dc.js/js/dc.js"></script>
+
+<script type="text/javascript">
+//==================================================
+// globals
+dc.config.defaultColors(d3.schemePaired) ; // silence warnings, https://github.com/d3/d3-scale-chromatic
+const csvdir = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/' ;
+const csvfiles = ['incare_popkids.csv','incare_monthly.csv','incare_plcdaysmon_NonFamily.csv'] ;
+var inputconfig = [ // iterable array of source file info
+  { filename: 'incare_plcdaysmon_NonFamily.csv', longname: 'Child-Days Separated from Family in Foster Care during Month', shortname: 'Separation Child-Days', },
+  { filename: 'incare_plcdaysmon_NonFamily_Maj.csv', longname: 'Child-Days Majority-Race Separated from Family in Foster Care during Month', shortname: 'Majority-Race Separation Child-Days', },
+  { filename: 'incare_plcdaysmon_NonFamily_NonMaj.csv', longname: 'Child-Days NonMajority-Race Separated from Family in Foster Care during Month', shortname: 'NonMajority-Race Separation Child-Days', },
+  { filename: 'incare_plcdaysmon.csv', longname: 'Child-Days in Foster Care during Month', shortname: 'Placement Child-Days', },
+  { filename: 'incare_monthly.csv', longname: 'In Foster Care Last Day of Month', shortname: 'In Care', },
+  { filename: 'removals_monthly.csv', longname: 'Removals to Foster Care during Month', shortname: 'Removals', },
+  { filename: 'incare_popkids.csv', longname: 'Children in the Population', shortname: 'Child Population', },
+];
+var inputpromises={}, rawcsv, xfdata=null, xf1, xf1dim1, xf1grp1,
+    focusChart = new dc.SeriesChart("#focuschartdiv"),
+    rangeChart = new dc.SeriesChart("#rangechartdiv")
+;
+
+// utils
+var str2date = s => new Date(s.replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
+var mon2date = m => new Date(m + '-15') ; //mon2date('2009-10')
+var date2mon = d3.timeFormat('%Y-%b') ;
+/* Reshape FCI (FosteringCourtImprovement.org) static CSV files (numerators & denominators for 140+ metrics, each file counts per month x region) into crossfilter's linear array of objects format with month+region identifying unique rows and numerators, denominators and metadata in each object. Multidimensional crossfilter datasets are built up by joining multiple tables from FCI files.
+*/
+function flattenfci( raw, colname, template=null ) {
+//raw=rawcsv; colname='PopKids'; template=null
+//raw=rawcsv; colname='Child Population'; template=xfdata.Removals
+  let ir = 0, // index into reshaped crossfilter dataset rows
+      df1 = template ? Object.assign( [], template ) : Array( raw.length * (Object.keys(raw[0]).length-1) ) // preallocates memory?
+  ;
+  raw.forEach( ro => { // row object loop
+      let dv, dt, dm, ro2 ;
+      //for( const [k,v] of Object.entries(ro) ) 
+      Object.entries(ro).forEach( (kv,ic) => { // column: region, count, index
+//ro=raw[0]; ic=0; kv=Object.entries(ro)[0] ;
+//ro=raw[0]; ic=0; kv=Object.entries(ro)[1] ;
+          let [region,value] = kv ; // support?
+          region = region.replace( /^(Statewide|National)$/i, '51 US States' ) ;
+          if( ic == 0 ) { // first column is a month|date used in join, so keep consistent
+              dv = value ; dt = str2date( value ) ; dm = date2mon(dt) ; // store for next columns
+              return ;
+          } else {
+              let ro2 = df1[ir] || { Month: dm, Region: region } ;
+              if( df1[ir] && (dm != df1[ir].Month || region != df1[ir].Region) ) {
+                  console.log(`month/region mismatch: ${colname}, ${region}, ${ir}, ${ic}`);
+                  throw new Error( 'month/region mismatch' ) ;
+              }
+              ro2[colname] = value ;
+              if( dv.replace(/\d/g, '').length == 2 ) { // 2 date delimiters => fully-formed date, append to ro2
+                  ro2[colname+' Date'] = dt ;
+              }
+              df1[ir++] = ro2 ;
+          }
+      } ) ;
+  } ) ;
+
+  return( df1 ) ;
+}
+//x=flattenfci( rawcsv, 'PopKids' )
+//x=flattenfci( rawcsv, 'Child Population', xfdata )
+
+// ui
+// https://mokole.com/palette.html, 58 colors, 5%/90%/1000, cat | grep '#' | tr '\012' ',' | sed 's/,/","/g' >x
+dc.config.defaultColors(["#000000","#808080","#2f4f4f","#556b2f","#a0522d","#191970","#8b0000","#808000","#008000","#3cb371","#bc8f8f","#663399","#008080","#b8860b","#bdb76b","#4682b4","#d2691e","#9acd32","#20b2aa","#cd5c5c","#00008b","#32cd32","#7f007f","#8fbc8f","#b03060","#d2b48c","#ff0000","#ff8c00","#ffd700","#ffff00","#c71585","#0000cd","#00ff00","#ba55d3","#00fa9a","#8a2be2","#4169e1","#e9967a","#dc143c","#00ffff","#f4a460","#9370db","#0000ff","#adff2f","#ff6347","#ff00ff","#db7093","#eee8aa","#6495ed","#dda0dd","#90ee90","#ff1493","#afeeee","#ee82ee","#87cefa","#7fffd4","#ff69b4","#ffc0cb"]) ;
+d3.selectAll('#crossfilterversion').text(crossfilter.version);
+d3.selectAll('#d3version').text(d3.version);
+d3.selectAll('#dcversion').text(dc.version);
+//dc.constants.EVENT_DELAY = 0;
+
+// need to fulfill at least 2 promises before we can do anything: incare_popkids, incare_monthly
+// create promises for file downloads:
+inputconfig.forEach( (o) => {
+  inputpromises[o.shortname] = d3.csv(csvdir+o.filename, d3.autoType).then( (csvrecords) => {
+    rawcsv = csvrecords ;
+    xfdata = flattenfci( rawcsv, o.shortname, xfdata ) ;
+    console.log( o.shortname+': '+csvrecords.length+' x '+Object.keys(csvrecords[0]).length+' => '+xfdata.length+' x '+Object.keys(xfdata[0]) );
+  } ).catch((err) => alert('File Read Error '+o.filename+':'+err));
+} ) ;
+console.log('Promises: '+Object.keys(inputpromises));
+
+// paint charts as promises are fulfilled ...
+Promise.all([inputpromises['In Care'], inputpromises['Child Population']]).then((o) => {
+  //console.log(o); // nothing in it?
+  console.log('Dimensions for charts: '+Object.keys(xfdata[0]));
+
+//xfdata.filter( r => r.Region == 'Alabam' )[10] // only one with incare dates
+//xfdata.filter( r => r.Region == '51 US States' )[10] // incare dates not there?
+  xf1 = crossfilter(xfdata);
+  xf1dim1 = xf1.dimension(function(d) {return [d.Region, d['In Care Date']]; });
+//https://stackoverflow.com/questions/43000194/clicking-on-rowchart-dc-js-changes-the-percentage, https://jsfiddle.net/gordonwoodhull/5xc9rh4f/1/
+    function reduceAdd(p, v) {
+      ++p.count;
+      p.num += v['In Care'];
+      p.den += v['Child Population'];
+      return p;
+    }
+    function reduceRemove(p, v) {
+      --p.count;
+      p.num -= v['In Care'];
+      p.den -= v['Child Population'];
+      return p;
+    }
+    function reduceInitial() {
+      return { count: 0, num: 0, den: 0 };
+    }
+    xf1grp1 = xf1dim1.group().reduce(reduceAdd, reduceRemove, reduceInitial);
+
+  focusChart
+    .width(768)
+    .height(480)
+//    .transitionDuration(0) // default in focus chart
+//    .chart(function(c) { return new dc.LineChart(c).curve(d3.curveCardinal).evadeDomainFilter(true); })
+    .chart(function(c) { return new dc.LineChart(c).evadeDomainFilter(true); })
+    .brushOn(false)
+    .yAxisLabel("In Care per 10k")
+    .yAxisPadding("5%")
+    .elasticY(true)
+    .dimension(xf1dim1)
+    .group(xf1grp1)
+    .mouseZoomable(true)
+    .controlsUseVisibility(true)
+    .rangeChart(rangeChart)
+    .seriesAccessor(function(d) {return d.key[0];}) // for legend items
+    .keyAccessor(function(d) {return d.key[1];}) // for x axis
+    .valueAccessor(function(p) { p.value.quo=p.value.num/p.value.den; return Math.round(10000*p.value.quo,1); }) // for y axis
+//    .legend(dc.legend().x(350).y(350).itemHeight(13).gap(5).horizontal(1).legendWidth(140).itemWidth(70))
+    .colors(d3.scaleOrdinal(dc.config.defaultColors()))
+  ;
+
+    focusChart.x(d3.scaleUtc().domain(['2009-10-01', '2020-03-31'].map((d) => new Date(d)))).xUnits(d3.timeMonth) ;
+    focusChart.xAxis().tickFormat(d3.timeFormat('%Y-%b')) ;
+    focusChart.title(function(d) {return d.key[0]+': '+focusChart.xAxis().tickFormat()(d.key[1])+', '+d.value.num+'/'+d.value.den+'='+Math.round(10000*d.value.quo,1)+' per 10k';}) ; // for point hover (not chart title)
+    focusChart.legend(new dc.HtmlLegend().container('#focuslegend').horizontal(true).highlightSelected(true)) ;
+
+
+  focusChart.margins().left += 40;
+
+  rangeChart
+    .height(100)
+    .transitionDuration(0) // fast in range chart
+    .chart(function(c) { return new dc.LineChart(c).curve(d3.curveCardinal); })
+    .brushOn(true)
+    .clipPadding(10)
+    .controlsUseVisibility(true)
+    // set the rest same as focusChart:
+    .width(focusChart.width())
+    .dimension(focusChart.dimension())
+    .group(focusChart.group())
+    .seriesAccessor(focusChart.seriesAccessor())
+    .keyAccessor(focusChart.keyAccessor())
+    .valueAccessor(focusChart.valueAccessor())
+    .colors(focusChart.colors())
+  ;
+    rangeChart.x(d3.scaleUtc().domain(['2009-10-01', '2020-03-31'].map((d) => new Date(d)))).xUnits(d3.timeMonth) ;
+    rangeChart.xAxis().tickFormat(d3.timeFormat('%Y-%b')) ;
+//  rangeChart.yAxis().tickFormat(focusChart.yAxis().tickFormat()) ;
+  rangeChart.margins().left = focusChart.margins().left ;
+
+  dc.renderAll();
+
+  });
+
+/*
+function load_it(file) {
+        d3.csv(csvdir+file).then(function(csvrecords) {
+            xf1.remove(() => true);
+            xf1.add(csvrecords);
+            dc.redrawAll();
+        });
+    };
+*/
+
+</script>
+    </body>
+    </html>
