@@ -157,6 +157,7 @@ Promise.all([inputpromises['In Care'], inputpromises['Child Population']]).then(
     .yAxisLabel("In Care per 10k")
     .yAxisPadding("5%")
     .elasticY(true)
+    .elasticX(true)
     .dimension(xf1dim1)
     .group(xf1grp1)
     .mouseZoomable(true)
@@ -182,6 +183,7 @@ Promise.all([inputpromises['In Care'], inputpromises['Child Population']]).then(
     .transitionDuration(0) // fast in range chart
     .chart(function(c) { return new dc.LineChart(c).curve(d3.curveCardinal); })
     .brushOn(true)
+    .elasticX(true)
     .clipPadding(10)
     .controlsUseVisibility(true)
     // set the rest same as focusChart:
