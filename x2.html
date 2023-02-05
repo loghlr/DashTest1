@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<!-- abb 2/4/2023: check crossfilter marginals -->
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>crossfilter marginal test1</title>
+    </head>
+    <body>
+
+<script type="text/javascript" src="https://dc-js.github.io/dc.js/js/d3.js"></script>
+<script type="text/javascript" src="https://dc-js.github.io/dc.js/js/crossfilter.js"></script>
+
+<script type="text/javascript">
+//==================================================
+// globals
+const csvdir = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/' ;
+const csvfiles = ['incare_popkids.csv','incare_monthly.csv','incare_plcdaysmon_NonFamily.csv'] ;
+var inputconfig = [ // iterable array of source file info
+  { filename: 'incare_plcdaysmon_NonFamily.csv', longname: 'Child-Days Separated from Family in Foster Care during Month', shortname: 'Separation Child-Days', },
+  { filename: 'incare_plcdaysmon_NonFamily_Maj.csv', longname: 'Child-Days Majority-Race Separated from Family in Foster Care during Month', shortname: 'Majority-Race Separation Child-Days', },
+  { filename: 'incare_plcdaysmon_NonFamily_NonMaj.csv', longname: 'Child-Days NonMajority-Race Separated from Family in Foster Care during Month', shortname: 'NonMajority-Race Separation Child-Days', },
+  { filename: 'incare_plcdaysmon.csv', longname: 'Child-Days in Foster Care during Month', shortname: 'Placement Child-Days', },
+  { filename: 'incare_monthly.csv', longname: 'In Foster Care Last Day of Month', shortname: 'In Care', },
+  { filename: 'removals_monthly.csv', longname: 'Removals to Foster Care during Month', shortname: 'Removals', },
+  { filename: 'incare_popkids.csv', longname: 'Children in the Population', shortname: 'Child Population', },
+];
+var inputpromises={}, rawcsv, xfdata=null, xf1, xf1dim1, xf1grp1;
+//    focusChart = new dc.SeriesChart("#focuschartdiv"),
+//    rangeChart = new dc.SeriesChart("#rangechartdiv")
+
+// utils
+var str2date = s => new Date(s.replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
+var mon2date = m => new Date(m + '-15') ; //mon2date('2009-10')
+var date2mon = d3.timeFormat('%Y-%b') ;
+/* Reshape FCI (FosteringCourtImprovement.org) static CSV files (numerators & denominators for 140+ metrics, each file counts per month x region) into crossfilter's linear array of objects format with month+region identifying unique rows and numerators, denominators and metadata in each object. Multidimensional crossfilter datasets are built up by joining multiple tables from FCI files.
+*/
+function flattenfci( raw, colname, template=null ) {
+//raw=rawcsv; colname='PopKids'; template=null
+//raw=rawcsv; colname='Child Population'; template=xfdata.Removals
+  let ir = 0, // index into reshaped crossfilter dataset rows
+      df1 = template ? Object.assign( [], template ) : Array( raw.length * (Object.keys(raw[0]).length-1) ) // preallocates memory?
+  ;
+  raw.forEach( ro => { // row object loop
+      let dv, dt, dm, ro2 ;
+      //for( const [k,v] of Object.entries(ro) ) 
+      Object.entries(ro).forEach( (kv,ic) => { // column: region, count, index
+//ro=raw[0]; ic=0; kv=Object.entries(ro)[0] ;
+//ro=raw[0]; ic=0; kv=Object.entries(ro)[1] ;
+          let [region,value] = kv ; // support?
+          region = region.replace( /^(Statewide|National)$/i, '51 US States' ) ;
+          if( ic == 0 ) { // first column is a month|date used in join, so keep consistent
+              dv = value ; dt = str2date( value ) ; dm = date2mon(dt) ; // store for next columns
+              return ;
+          } else {
+              let ro2 = df1[ir] || { Month: dm, Region: region } ;
+              if( df1[ir] && (dm != df1[ir].Month || region != df1[ir].Region) ) {
+                  console.log(`month/region mismatch: ${colname}, ${region}, ${ir}, ${ic}`);
+                  throw new Error( 'month/region mismatch' ) ;
+              }
+              ro2[colname] = value ;
+              if( dv.replace(/\d/g, '').length == 2 ) { // 2 date delimiters => fully-formed date, append to ro2
+                  ro2[colname+' Date'] = dt ;
+              }
+              df1[ir++] = ro2 ;
+          }
+      } ) ;
+  } ) ;
+
+  return( df1 ) ;
+}
+
+// need to fulfill at least 2 promises before we can do anything: incare_popkids, incare_monthly
+// create promises for file downloads:
+inputconfig.forEach( (o) => {
+  inputpromises[o.shortname] = d3.csv(csvdir+o.filename, d3.autoType).then( (csvrecords) => {
+    rawcsv = csvrecords ;
+    xfdata = flattenfci( rawcsv, o.shortname, xfdata ) ;
+    console.log( o.shortname+': '+csvrecords.length+' x '+Object.keys(csvrecords[0]).length+' => '+xfdata.length+' x '+Object.keys(xfdata[0]) );
+    // check marginals as promises are fulfilled ...
+    checkmarginals( o.filename, rawcsv, xfdata ) ;
+
+  } ).catch((err) => alert('File Read Error '+o.filename+':'+err));
+} ) ;
+console.log('Promises: '+Object.keys(inputpromises));
+
+function checkmarginals( filename, rawcsv, xfdata ) {
+    xf1 = crossfilter(xfdata);
+    x1 = xf1.dimension( d => d.Region ); x1.filter('Ohio'); x1.group().reduceCount().top(1)[0] // ignores filter, so alpha sort is 126 (unique months) in 51 US States
+    x2 = xf1.dimension( d => d.Region ); x2.group().reduceCount().top(1)[0] // applies filter
+    //x2.group().reduceCount().top(Infinity).reduce( (a,n) => a+n.value, 0 ) // 103
+    x1.filterAll(); x1.filter('Georgia'); console.log(x2.group().reduceCount().top(1)[0]) // 126
+    x1.filterAll(); x1.filter('Ohio'); console.log(x2.group().reduceCount().top(1)[0]) // 103?
+    let ret=null; console.assert( (ret = x2.group().reduceCount().top(1)[0].value == rawcsv.length) ) ;
+/*
+    x1.filterAll(); x1.filter('Georgia'); console.log(x2.group().reduceSum(f => f['In Care']).top(1)[0]) // 1276745
+    x1.filterAll(); x1.filter('Ohio'); console.log(x2.group().reduceSum(f => f['In Care']).top(1)[0]) // 1390432?
+    x2.filterAll(); x1.filterAll();
+*/
+
+    x3 = xf1.dimension( d => d.Month )
+    x1.filterAll(); x3.filterAll()
+    x1.filter('Ohio'); x3.filter('2020-Mar')
+    console.log(xf1.groupAll().reduceSum( f => f['In Care']).value()) // 16693!
+    x3.filterAll(); x3.filter('2019-Mar')
+    console.log(xf1.groupAll().reduceSum( f => f['In Care']).value()) // 16070!
+    x1.filterAll(); x3.filterAll()
+    x1.filter('Georgia'); x3.filter('2020-Mar')
+    console.log(xf1.groupAll().reduceSum( f => f['In Care']).value()) // 12280!
+
+/*
+    xf1dim1 = xf1.dimension(function(d) {return [d.Region, d['In Care Date']]; });
+    xf1dim1.filter([['Ohio', new Date('3/31/2020')]])
+    xf1.groupAll().reduceSum( f => f['In Care']).value() // 16693? no, 104779588, so no filtering.
+    xf1dim1.filterAll()
+*/
+    return(ret) ;
+} ;
+</script>
+    </body>
+    </html>
