@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <title>Dashboard Concept with crossfilter/dc/d3 Test5</title>
+    <link rel="stylesheet" type="text/css" href="http://dc-js.github.io/dc.js/css/dc.css"/>
+    <style>
+        label {
+            white-space: nowrap;
+        }
+        #rankchartdiv .axis.x .tick text {
+            /*http://dc-js.github.io/dc.js/examples/focus-ordinal-bar.html*/
+            text-anchor: end;
+            transform: rotate(-80deg) translate(-1em, -1.3em);
+        }
+        .dc-chart .grid-line line {
+            fill: none;
+            stroke: #ccc;
+            opacity: 0.5;
+            shape-rendering: crispEdges;
+        }
+    </style>
+
+  </head>
+
+  <body>
+    <div id="rankchartdiv">
+        <div class="title">States Ranked</div>
+        Selected: <span id='rankchartfilter' class="filter">...</span>
+      </div>
+    </div>
+    <div id="tschartdiv" xstyle="overflow:auto;">
+        <div class="title">State Time Series</div>
+        Selected: <span id='tschartfilter' class="filter">...</span>
+        <div id="tslegend" class="dc-html-legend-container"></div>
+    </div>
+    <p>Running
+    crossfilter.js v<span id="crossfilterversion">?</span>,
+    d3.js v<span id="d3version">?</span>,
+    dc.js v<span id="dcversion">?</span>.
+    </p>
+
+    <script type="text/javascript" src="https://dc-js.github.io/dc.js/js/d3.js" ></script>
+    <script type="text/javascript" src="https://dc-js.github.io/dc.js/js/crossfilter.js" ></script>
+    <script type="text/javascript" src="https://dc-js.github.io/dc.js/js/dc.js" ></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/sugar/2.0.6/sugar.min.js" >// to parse '2009-Oct' </script>
+
+<script type="text/javascript">
+//===========================================================
+// prelims
+//dc.config.defaultColors(['#020202'].concat(d3.schemeDark2)) ; // silence warnings, https://github.com/d3/d3-scale-chromatic
+dc.config.defaultColors(['#020202','#3182bd','#6baed6','#9ecae1','#c6dbef','#e6550d','#fd8d3c','#fdae6b','#fdd0a2','#31a354','#74c476','#a1d99b','#c7e9c0','#756bb1','#9e9ac8','#bcbddc','#dadaeb','#636363','#969696','#bdbdbd','#d9d9d9']) ; // black+d3.schemeCategory20c
+d3.selectAll('#crossfilterversion').text(crossfilter.version);
+d3.selectAll('#d3version').text(d3.version);
+d3.selectAll('#dcversion').text(dc.version);
+
+//===========================================================
+// globals
+const csvdir = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/' ;
+var inputconfig = [ // iterable array of source file info
+  { filename: 'incare_plcdaysmon_NonFamily.csv', longname: 'Child-Days Separated from Family in Foster Care during Month', shortname: 'Separation Child-Days', },
+  { filename: 'incare_plcdaysmon_NonFamily_Maj.csv', longname: 'Child-Days Majority-Race Separated from Family in Foster Care during Month', shortname: 'Majority-Race Separation Child-Days', },
+  { filename: 'incare_plcdaysmon_NonFamily_NonMaj.csv', longname: 'Child-Days NonMajority-Race Separated from Family in Foster Care during Month', shortname: 'NonMajority-Race Separation Child-Days', },
+  { filename: 'incare_plcdaysmon.csv', longname: 'Child-Days in Foster Care during Month', shortname: 'Placement Child-Days', },
+  { filename: 'incare_monthly.csv', longname: 'In Foster Care Last Day of Month', shortname: 'In Care', },
+  { filename: 'removals_monthly.csv', longname: 'Removals to Foster Care during Month', shortname: 'Removals', },
+  { filename: 'incare_popkids.csv', longname: 'Children in the Population', shortname: 'Child Population', },
+];
+var inputpromises={}, rawcsv, xfdata=null, xf1, xf1dim1, xf1grp1, xf1grp1filtered
+    rankchart = new dc.BarChart("#rankchartdiv"),
+    tschart = new dc.SeriesChart("#tschartdiv")
+//    rangeChart = new dc.SeriesChart("#rangechartdiv")
+;
+var regionsel=['51 US States','New Jersey','West Virginia'];
+var datesel=new Date('3/31/2020') ;
+
+//===========================================================
+// utils
+Array.prototype.unique = function () { return [...new Set(this)] ; }
+Array.prototype.includesall = function (ar2) { return this.length > 0 && this.every( v => ar2.includes(v) ); }
+var str2date = s => Sugar.Date.create(s.replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
+var mon2date = m => Sugar.Date.create(m + '-15') ; //Date('2009-Oct-15') error in Firefox?
+var date2mon = d3.timeFormat('%Y-%b') ;
+/* Reshape FCI (FosteringCourtImprovement.org) static CSV files (numerators & denominators for 140+ metrics, each file counts per month x region) into crossfilter's linear array of objects format with month+region identifying unique rows and numerators, denominators and metadata in each object. Multidimensional crossfilter datasets are built up by joining multiple tables from FCI files.
+*/
+function flattenfci( raw, colname, template=null ) {
+//raw=rawcsv; colname='PopKids'; template=null
+//raw=rawcsv; colname='Child Population'; template=xfdata.Removals
+  let ir = 0, // index into reshaped crossfilter dataset rows
+      df1 = template ? Object.assign( [], template ) : Array( raw.length * (Object.keys(raw[0]).length-1) ) // preallocates memory?
+  ;
+  raw.forEach( ro => { // row object loop
+      let dv, dt, dm, ro2 ;
+      //for( const [k,v] of Object.entries(ro) ) 
+      Object.entries(ro).forEach( (kv,ic) => { // column: region, count, index
+//ro=raw[0]; ic=0; kv=Object.entries(ro)[0] ;
+//ro=raw[0]; ic=0; kv=Object.entries(ro)[1] ;
+          let [region,value] = kv ; // support?
+          region = region.replace( /^(Statewide|National)$/i, '51 US States' ) ;
+          if( ic == 0 ) { // first column is a month|date used in join, so keep consistent
+              dv = value ; dt = str2date( value ) ; dm = date2mon(dt) ; // store for next columns
+              return ;
+          } else {
+              let ro2 = df1[ir] || { Month: dm, Region: region } ;
+              if( df1[ir] && (dm != df1[ir].Month || region != df1[ir].Region) ) {
+                  console.log(`month/region mismatch: ${colname}, ${region}, ${ir}, ${ic}`);
+                  throw new Error( 'month/region mismatch' ) ;
+              }
+              ro2[colname] = value ;
+              if( dv.replace(/\d/g, '').length == 2 ) { // 2 date delimiters => fully-formed date, append to ro2
+                  ro2[colname+' Date'] = dt ;
+              }
+              df1[ir++] = ro2 ;
+          }
+      } ) ;
+  } ) ;
+
+  return( df1 ) ;
+}
+//x=flattenfci( rawcsv, 'PopKids' )
+//x=flattenfci( rawcsv, 'Child Population', xfdata )
+
+//===========================================================
+// ui
+d3.selectAll('#crossfilterversion').text(crossfilter.version);
+d3.selectAll('#d3version').text(d3.version);
+d3.selectAll('#dcversion').text(dc.version);
+
+// need to fulfill at least 2 promises before we can do anything: incare_popkids, incare_monthly
+// create promises for file downloads:
+inputconfig.forEach( (o) => {
+  inputpromises[o.shortname] = d3.csv(csvdir+o.filename, d3.autoType).then( (csvrecords) => {
+    rawcsv = csvrecords ;
+    xfdata = flattenfci( rawcsv, o.shortname, xfdata ) ;
+    console.log( o.shortname+': '+csvrecords.length+' x '+Object.keys(csvrecords[0]).length+' => '+xfdata.length+' x '+Object.keys(xfdata[0]) );
+    // check marginals as promises are fulfilled ...
+    //checkmarginals( o.filename, rawcsv, xfdata ) ;
+
+  } ).catch((err) => alert('File Read Error '+o.filename+':'+err));
+} ) ;
+console.log('Promises: '+Object.keys(inputpromises));
+
+// paint charts as promises are fulfilled ...
+Promise.all([inputpromises['In Care'], inputpromises['Child Population']]).then( o => {
+  //console.log(o); // nothing in it?
+  console.log('Dimensions for charts: '+Object.keys(xfdata[0]));
+
+    xf1 = crossfilter(xfdata);
+
+    // region+date dimension for the time series chart
+    // composite/series charts are effectively 3D (x, y, series), so "dimension" is a 2D object. these will be "keys" for the chart abscissa and series legend:
+    xf1dim1 = xf1.dimension( d => [d.Region, mon2date(d.Month)] );
+    // need custom "group" .reduce() functions for the ordinate (y values) because they're numerator/denominator=quotient rates, not simple sums of counts: https://stackoverflow.com/questions/43000194/clicking-on-rowchart-dc-js-changes-the-percentage, https://jsfiddle.net/gordonwoodhull/5xc9rh4f/1/
+    function reduceAdd(p, v) {
+      // filtering here won't work: series legend shows all regions, including zeros
+      p.num += v['In Care'];
+      p.den += v['Child Population'];
+      return p;
+    }
+    function reduceRemove(p, v) {
+      p.num -= v['In Care'];
+      p.den -= v['Child Population'];
+      return p;
+    }
+    function reduceInitial() {
+      return { num: 0, den: 0 };
+    }
+    xf1grp1 = xf1dim1.group().reduce(reduceAdd, reduceRemove, reduceInitial);
+    // this filter this group on rankchart.filters() so that the series machinery (legend) works
+    // https://github.com/dc-js/dc.js/wiki/FAQ
+    function filter_bins(source_group) { //}, f) {
+        return {
+            all:function () {
+                return source_group.all().filter(function(d) {
+                    return rankchart.filters() && rankchart.filters().includes(d.key[0]) ? d.value : null ;
+                });
+            }
+        };
+    }
+    xf1grp1filtered = filter_bins(xf1grp1) ;
+
+    // region only dimension, no dates for the ranked bar chart
+    xf1dim2 = xf1.dimension( d => d.Region );
+    xf1grp2 = xf1dim2.group().reduce(reduceAdd, reduceRemove, reduceInitial);
+    // this filters all other xf1 dimensions, but that screws up the time series. https://github.com/square/crossfilter/issues/161
+    // so filter xf1dim1, then it applies to xf1dim2, but not the time series chart -- makes no sense ... but it works. til it stops working?
+    xf1dim1.filterFunction( function(k, i) {
+        return( date2mon(k[1]) == date2mon(datesel) ) ;
+    } ) ;
+
+    rankchart
+      .dimension(xf1dim2)
+      .group(xf1grp2)
+      .valueAccessor(function (p) {
+        p.value.quo = p.value.num / p.value.den;
+        return Math.round(10000 * p.value.quo, 1);
+      })
+      .ordering((r) => r.value.quo)
+      .minWidth(500)
+      .minHeight(300)
+      .margins({ left: 35, top: 10, right: 10, bottom: 100 })
+      .x(d3.scaleBand()).xUnits(dc.units.ordinal)
+      .brushOn(false)
+      .elasticX(true)
+      .elasticY(true)
+      .renderHorizontalGridLines(true)
+      .barPadding(0.1)
+      .outerPadding(0.2)
+      .yAxisLabel('In Care Rate')
+      .yAxisPadding('10%')
+      .renderLabel(false)
+      .turnOnControls()
+      .controlsUseVisibility(true)
+    ;
+    rankchart.yAxis().tickFormat(d3.format(',.2r'));
+    //.xAxisLabel('State')
+    //.width(768)
+    //.mouseZoomable(true) // x.invert is not a function?
+    //.zoomScale([4,8])
+    //.xAxis().orient('top')
+    //.controlsUseVisibility(true)
+    //nothing: rankchart.xAxis().tickArguments([{orient: 'top'}]) ;
+    //works: rankchart.render() ;
+
+    tschart
+      .dimension(xf1dim1) // ignores xf1dim1.filterFunction() for latest date
+      .group(xf1grp1filtered)
+      .keyAccessor( p => p.key[1] ) // x values
+      .valueAccessor(function (p) {
+        p.value.quo = p.value.num / p.value.den;
+        return Math.round(10000 * p.value.quo, 1);
+      }) // y values
+      .seriesAccessor( p => p.key[0] ) // series values
+      .title( p => p.key[0]+', '+date2mon(p.key[1])+'\n10k*'+p.value.num+'/'+p.value.den+'='+Math.round(10000*p.value.quo) )
+      .minWidth(500)
+      .minHeight(300)
+      .elasticX(true)
+      .elasticY(true)
+      .brushOn(false)
+      .renderHorizontalGridLines(true)
+      .legend(new dc.HtmlLegend().container('#tslegend').horizontal(true).highlightSelected(true))
+      .yAxisLabel(rankchart.yAxisLabel())
+      .x(
+        d3.scaleUtc() // scaleTime is local
+          .domain(['2009-10-01', '2020-03-31'].map((d) => new Date(d)))
+      ).xUnits(d3.timeMonth)
+      .turnOnControls()
+      .controlsUseVisibility(true)
+    ;
+    tschart.xAxis().tickFormat(d3.timeFormat('%Y-%b'))
+
+    // init rankchart filter (selections)
+    rankchart.render() ; // to define .filter?
+    rankchart.filter([regionsel]) ;
+    dc.renderAll();
+  });
+</script>
+
+  </body>
+</html>
+
