@@ -71,8 +71,9 @@ var inputpromises={}, rawcsv, xfdata=null, xf1, xf1dim1, xf1grp1, xf1grp1filtere
     tschart = new dc.SeriesChart("#tschartdiv")
 //    rangeChart = new dc.SeriesChart("#rangechartdiv")
 ;
-var regionsel=['51 US States','New Jersey','West Virginia'];
-var datesel=new Date('3/31/2020') ;
+var metricsel=inputconfig[0].shortname, datesel=[new Date('4/1/2019'), new Date('3/31/2020')] ;
+//var metricsel='In Care', datesel=new Date('3/31/2020') ;
+var defaultregionsel=['51 US States','New Jersey','West Virginia'] ;
 
 //===========================================================
 // utils
@@ -81,6 +82,14 @@ Array.prototype.includesall = function (ar2) { return this.length > 0 && this.ev
 var str2date = s => Sugar.Date.create(s.replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
 var mon2date = m => Sugar.Date.create(m + '-15') ; //Date('2009-Oct-15') error in Firefox?
 var date2mon = d3.timeFormat('%Y-%b') ;
+//var date2mon = d => d.map( v => d3.timeFormat('%Y-%b')(v) ) ;
+var dayspermon = function(mon) {
+  var d = mon2date(mon) ;
+  //var i = Array(12).fill().map( (e,i) => i++ ) ;
+  var n = new Date( d.getFullYear(), d.getMonth()+1, 0 ).getDate() ;
+  return( n ) ;
+} //dayspermon('2012-Oct')
+
 /* Reshape FCI (FosteringCourtImprovement.org) static CSV files (numerators & denominators for 140+ metrics, each file counts per month x region) into crossfilter's linear array of objects format with month+region identifying unique rows and numerators, denominators and metadata in each object. Multidimensional crossfilter datasets are built up by joining multiple tables from FCI files.
 */
 function flattenfci( raw, colname, template=null ) {
@@ -101,7 +110,7 @@ function flattenfci( raw, colname, template=null ) {
               dv = value ; dt = str2date( value ) ; dm = date2mon(dt) ; // store for next columns
               return ;
           } else {
-              let ro2 = df1[ir] || { Month: dm, Region: region } ;
+              let ro2 = df1[ir] || { Month: dm, Region: region, NDays: dayspermon(dm) } ;
               if( df1[ir] && (dm != df1[ir].Month || region != df1[ir].Region) ) {
                   console.log(`month/region mismatch: ${colname}, ${region}, ${ir}, ${ic}`);
                   throw new Error( 'month/region mismatch' ) ;
@@ -141,24 +150,24 @@ inputconfig.forEach( (o) => {
 console.log('Promises: '+Object.keys(inputpromises));
 
 // paint charts as promises are fulfilled ...
-Promise.all([inputpromises['In Care'], inputpromises['Child Population']]).then( o => {
+Promise.all([inputpromises[metricsel], inputpromises['Child Population']]).then( o => {
   //console.log(o); // nothing in it?
   console.log('Dimensions for charts: '+Object.keys(xfdata[0]));
 
     xf1 = crossfilter(xfdata);
 
     // region+date dimension for the time series chart
-    // composite/series charts are effectively 3D (x, y, series), so "dimension" is a 2D object. these will be "keys" for the chart abscissa and series legend:
+    // composite/series charts are effectively 3D (x, y, series), so "dimension" is a 2D (2 keys) object. these will be "keys" for the chart abscissa and series legend:
     xf1dim1 = xf1.dimension( d => [d.Region, mon2date(d.Month)] );
     // need custom "group" .reduce() functions for the ordinate (y values) because they're numerator/denominator=quotient rates, not simple sums of counts: https://stackoverflow.com/questions/43000194/clicking-on-rowchart-dc-js-changes-the-percentage, https://jsfiddle.net/gordonwoodhull/5xc9rh4f/1/
     function reduceAdd(p, v) {
       // filtering here won't work: series legend shows all regions, including zeros
-      p.num += v['In Care'];
+      p.num += v[metricsel]*30/v['NDays']; // scale monthly totals to 30-day months? preprocessing?
       p.den += v['Child Population'];
       return p;
     }
     function reduceRemove(p, v) {
-      p.num -= v['In Care'];
+      p.num -= v[metricsel]*30/v['NDays'];
       p.den -= v['Child Population'];
       return p;
     }
@@ -166,7 +175,7 @@ Promise.all([inputpromises['In Care'], inputpromises['Child Population']]).then(
       return { num: 0, den: 0 };
     }
     xf1grp1 = xf1dim1.group().reduce(reduceAdd, reduceRemove, reduceInitial);
-    // this filter this group on rankchart.filters() so that the series machinery (legend) works
+    // filter this group to rankchart.filters() regions so that the series machinery (legend) works
     // https://github.com/dc-js/dc.js/wiki/FAQ
     function filter_bins(source_group) { //}, f) {
         return {
@@ -177,15 +186,19 @@ Promise.all([inputpromises['In Care'], inputpromises['Child Population']]).then(
             }
         };
     }
-    xf1grp1filtered = filter_bins(xf1grp1) ;
+    xf1grp1filtered = filter_bins(xf1grp1) ; // use in time series chart to match rankchart region selections
 
     // region only dimension, no dates for the ranked bar chart
     xf1dim2 = xf1.dimension( d => d.Region );
     xf1grp2 = xf1dim2.group().reduce(reduceAdd, reduceRemove, reduceInitial);
-    // this filters all other xf1 dimensions, but that screws up the time series. https://github.com/square/crossfilter/issues/161
-    // so filter xf1dim1, then it applies to xf1dim2, but not the time series chart -- makes no sense ... but it works. til it stops working?
-    xf1dim1.filterFunction( function(k, i) {
-        return( date2mon(k[1]) == date2mon(datesel) ) ;
+    // filter all other xf1 dimensions, not those using xf1dim1, https://github.com/square/crossfilter/issues/161
+    // super confusing, but works: xf1dim1.filterFunction applies to xf1dim2 only!, not charts that use xf1dim1
+    xf1dim1.filterFunction( function(k) {
+//        return( date2mon(k[1]) == date2mon(datesel) ) ; // single month, global datesel for now
+        // k[1] should be a date
+        let ret = k !== undefined && k[1] >= datesel[0] && k[1] <= datesel[1] ;
+//        if( ret ) { console.log( 'date filterFunction, k=', k ) ; }
+        return( ret ) ;
     } ) ;
 
     rankchart
@@ -206,7 +219,7 @@ Promise.all([inputpromises['In Care'], inputpromises['Child Population']]).then(
       .renderHorizontalGridLines(true)
       .barPadding(0.1)
       .outerPadding(0.2)
-      .yAxisLabel('In Care Rate')
+      .yAxisLabel(metricsel+' Rate')
       .yAxisPadding('10%')
       .renderLabel(false)
       .turnOnControls()
@@ -251,7 +264,30 @@ Promise.all([inputpromises['In Care'], inputpromises['Child Population']]).then(
 
     // init rankchart filter (selections)
     rankchart.render() ; // to define .filter?
-    rankchart.filter([regionsel]) ;
+    rankchart.filter([defaultregionsel]) ;
+/*
+// test how to modify region filter to require regions before xf1dim1 is modified:
+rankchart.on( 'filtered', function(chart) {
+    console.log( 'rankchart filtered: '+chart.filters()+'. tschart children='+tschart.children().length ) ;
+} ) ;
+// it hits this first with unmodified current, then .on above, but it doesn't hit this when a region is removed, so this alone won't work to prevent removal of a selected region:
+//rankchart.addFilterHandler( (current, toadd) => { // toadd.length==1?
+*/
+// but this might, yep perfect:
+rankchart.removeFilterHandler( (current, toremove) => { // toremove.length==1?
+    //console.log( 'rankchart filter handler: current='+current+', toremove='+toremove ) ;
+    if( !('defaultregionsel' in window && defaultregionsel.includes(toremove)) ) {
+        // ok to remove it, use the dc base-mixin default handler, https://dc-js.github.io/dc.js/docs/html/dc.baseMixin.html#removeFilterHandler
+        for (var i = 0; i < current.length; i++) {
+            if (current[i] <= toremove && current[i] >= toremove) {
+                current.splice(i, 1);
+                break;
+            }
+        }
+    }
+    return current;
+} ) ;
+
     dc.renderAll();
   });
 </script>
