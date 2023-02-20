@@ -25,12 +25,12 @@
 
   <body>
     <div id="rankchartdiv">
-        <div class="title">States Ranked</div>
+        <div class="title">Regions Ranked</div>
         Selected: <span id='rankchartfilter' class="filter">...</span>
       </div>
     </div>
     <div id="tschartdiv" xstyle="overflow:auto;">
-        <div class="title">State Time Series</div>
+        <div class="title">Region Time Series</div>
         Selected: <span id='tschartfilter' class="filter">...</span>
         <div id="tslegend" class="dc-html-legend-container"></div>
     </div>
@@ -56,7 +56,10 @@ d3.selectAll('#dcversion').text(dc.version);
 
 //===========================================================
 // globals
-const csvdir = 'https://raw.githubusercontent.com/loghlr/DashTest1/main/' ;
+var inputpromises={}, rawcsv, xfdata=null, xf1, xf1dim1, xf1grp1, xf1grp1filtered
+    rankchart = new dc.BarChart("#rankchartdiv"),
+    tschart = new dc.SeriesChart("#tschartdiv")
+
 var inputconfig = [ // iterable array of source file info
   { filename: 'incare_plcdaysmon_NonFamily.csv', longname: 'Child-Days Separated from Family in Foster Care during Month', shortname: 'Separation Child-Days', },
   { filename: 'incare_plcdaysmon_NonFamily_Maj.csv', longname: 'Child-Days Majority-Race Separated from Family in Foster Care during Month', shortname: 'Majority-Race Separation Child-Days', },
@@ -66,21 +69,35 @@ var inputconfig = [ // iterable array of source file info
   { filename: 'removals_monthly.csv', longname: 'Removals to Foster Care during Month', shortname: 'Removals', },
   { filename: 'incare_popkids.csv', longname: 'Children in the Population', shortname: 'Child Population', },
 ];
-var inputpromises={}, rawcsv, xfdata=null, xf1, xf1dim1, xf1grp1, xf1grp1filtered
-    rankchart = new dc.BarChart("#rankchartdiv"),
-    tschart = new dc.SeriesChart("#tschartdiv")
-//    rangeChart = new dc.SeriesChart("#rangechartdiv")
 ;
-var metricsel=inputconfig[0].shortname, datesel=[new Date('4/1/2019'), new Date('3/31/2020')] ;
-//var metricsel='In Care', datesel=new Date('3/31/2020') ;
-var defaultregionsel=['51 US States','New Jersey','West Virginia'] ;
+
+/*
+var uiconfig = {
+    csvdir: 'https://raw.githubusercontent.com/loghlr/DashTest1/main/',
+    sitename: '51 US States',
+    metricsel: inputconfig[0].shortname,
+    datesel: [new Date('4/1/2019'), new Date('3/31/2020')],
+    nmonthsperiod: 12,
+    defaultregionsel: ['sitename','West Virginia'],
+} ;
+*/
+var uiconfig = {
+    csvdir: 'https://fosteringcourtimprovement.org/ga/County/',
+    sitename: '159 GA Counties',
+    metricsel: inputconfig[0].shortname,
+    //datesel: [new Date('10/1/2021'), new Date('9/30/2022')],
+    datesel: [new Date('10/1/2021').valueOf(), new Date('9/30/2022').valueOf()],
+    nmonthsperiod: 12,
+    defaultregionsel: ['sitename'],
+} ;
+uiconfig.defaultregionsel[0] = uiconfig.sitename ; // any other way to set this?
 
 //===========================================================
 // utils
 Array.prototype.unique = function () { return [...new Set(this)] ; }
 Array.prototype.includesall = function (ar2) { return this.length > 0 && this.every( v => ar2.includes(v) ); }
 var str2date = s => Sugar.Date.create(s.replace(/^(\d{4})\D?(\d{2})$/, '$2/15/$1')) ;
-var mon2date = m => Sugar.Date.create(m + '-15') ; //Date('2009-Oct-15') error in Firefox?
+var mon2date = (new Date('2009-Oct-15').valueOf()) ? m => new Date(m + '-15') : m => Sugar.Date.create(m + '-15') ; // Date('2009-Oct-15') invalid in Firefox, but Sugar.Date.create doubles load time
 var date2mon = d3.timeFormat('%Y-%b') ;
 //var date2mon = d => d.map( v => d3.timeFormat('%Y-%b')(v) ) ;
 var dayspermon = function(mon) {
@@ -105,12 +122,12 @@ function flattenfci( raw, colname, template=null ) {
 //ro=raw[0]; ic=0; kv=Object.entries(ro)[0] ;
 //ro=raw[0]; ic=0; kv=Object.entries(ro)[1] ;
           let [region,value] = kv ; // support?
-          region = region.replace( /^(Statewide|National)$/i, '51 US States' ) ;
+          region = region.replace( /^(Statewide|National)$/i, uiconfig.sitename ) ;
           if( ic == 0 ) { // first column is a month|date used in join, so keep consistent
               dv = value ; dt = str2date( value ) ; dm = date2mon(dt) ; // store for next columns
               return ;
           } else {
-              let ro2 = df1[ir] || { Month: dm, Region: region, NDays: dayspermon(dm) } ;
+              let ro2 = df1[ir] || { Month: dm, Region: region, Midmonth: mon2date(dm), NDays: dayspermon(dm) } ;
               if( df1[ir] && (dm != df1[ir].Month || region != df1[ir].Region) ) {
                   console.log(`month/region mismatch: ${colname}, ${region}, ${ir}, ${ic}`);
                   throw new Error( 'month/region mismatch' ) ;
@@ -138,7 +155,7 @@ d3.selectAll('#dcversion').text(dc.version);
 // need to fulfill at least 2 promises before we can do anything: incare_popkids, incare_monthly
 // create promises for file downloads:
 inputconfig.forEach( (o) => {
-  inputpromises[o.shortname] = d3.csv(csvdir+o.filename, d3.autoType).then( (csvrecords) => {
+  inputpromises[o.shortname] = d3.csv(uiconfig.csvdir+o.filename, d3.autoType).then( (csvrecords) => {
     rawcsv = csvrecords ;
     xfdata = flattenfci( rawcsv, o.shortname, xfdata ) ;
     console.log( o.shortname+': '+csvrecords.length+' x '+Object.keys(csvrecords[0]).length+' => '+xfdata.length+' x '+Object.keys(xfdata[0]) );
@@ -150,7 +167,7 @@ inputconfig.forEach( (o) => {
 console.log('Promises: '+Object.keys(inputpromises));
 
 // paint charts as promises are fulfilled ...
-Promise.all([inputpromises[metricsel], inputpromises['Child Population']]).then( o => {
+Promise.all([inputpromises[uiconfig.metricsel], inputpromises['Child Population']]).then( o => {
   //console.log(o); // nothing in it?
   console.log('Dimensions for charts: '+Object.keys(xfdata[0]));
 
@@ -158,16 +175,16 @@ Promise.all([inputpromises[metricsel], inputpromises['Child Population']]).then(
 
     // region+date dimension for the time series chart
     // composite/series charts are effectively 3D (x, y, series), so "dimension" is a 2D (2 keys) object. these will be "keys" for the chart abscissa and series legend:
-    xf1dim1 = xf1.dimension( d => [d.Region, mon2date(d.Month)] );
+    xf1dim1 = xf1.dimension( d => [d.Region, d.Midmonth] ); // mon2date(d.Month) slow here
     // need custom "group" .reduce() functions for the ordinate (y values) because they're numerator/denominator=quotient rates, not simple sums of counts: https://stackoverflow.com/questions/43000194/clicking-on-rowchart-dc-js-changes-the-percentage, https://jsfiddle.net/gordonwoodhull/5xc9rh4f/1/
     function reduceAdd(p, v) {
       // filtering here won't work: series legend shows all regions, including zeros
-      p.num += v[metricsel]*30/v['NDays']; // scale monthly totals to 30-day months? preprocessing?
+      p.num += v[uiconfig.metricsel]*30/v['NDays']; // scale monthly totals to 30-day months? preprocessing?
       p.den += v['Child Population'];
       return p;
     }
     function reduceRemove(p, v) {
-      p.num -= v[metricsel]*30/v['NDays'];
+      p.num -= v[uiconfig.metricsel]*30/v['NDays'];
       p.den -= v['Child Population'];
       return p;
     }
@@ -191,27 +208,34 @@ Promise.all([inputpromises[metricsel], inputpromises['Child Population']]).then(
     // region only dimension, no dates for the ranked bar chart
     xf1dim2 = xf1.dimension( d => d.Region );
     xf1grp2 = xf1dim2.group().reduce(reduceAdd, reduceRemove, reduceInitial);
-    // filter all other xf1 dimensions, not those using xf1dim1, https://github.com/square/crossfilter/issues/161
+    // filter all other xf1 dimensions, not xf1dim1, https://github.com/square/crossfilter/issues/161
     // super confusing, but works: xf1dim1.filterFunction applies to xf1dim2 only!, not charts that use xf1dim1
     xf1dim1.filterFunction( function(k) {
-//        return( date2mon(k[1]) == date2mon(datesel) ) ; // single month, global datesel for now
-        // k[1] should be a date
-        let ret = k !== undefined && k[1] >= datesel[0] && k[1] <= datesel[1] ;
+        // k is key from xf1dim1 (not xf1dim2), so [region, date]
+//        return( date2mon(k[1]) == date2mon(uiconfig.datesel) ) ; // single month, global datesel for now
+        // k[1] should be a date, may be expensive comparison. any way to make it numeric?
+//        let ret = k !== undefined && k[1] >= uiconfig.datesel[0] && k[1] <= uiconfig.datesel[1] ;
+        if( k === undefined ) {
+            return( false ) ;
+        } else {
+            let val1 = k[1].valueOf() ;
+            return( val1 >= uiconfig.datesel[0] && val1 <= uiconfig.datesel[1] ) ;
+        }
 //        if( ret ) { console.log( 'date filterFunction, k=', k ) ; }
-        return( ret ) ;
+//        return( ret ) ;
     } ) ;
 
     rankchart
       .dimension(xf1dim2)
       .group(xf1grp2)
       .valueAccessor(function (p) {
-        p.value.quo = p.value.num / p.value.den;
+        p.value.quo = (p.value.num / p.value.den)*uiconfig.nmonthsperiod ;
         return Math.round(10000 * p.value.quo, 1);
       })
       .ordering((r) => r.value.quo)
       .minWidth(500)
       .minHeight(300)
-      .margins({ left: 35, top: 10, right: 10, bottom: 100 })
+      .margins({ left: 55, top: 10, right: 10, bottom: 100 })
       .x(d3.scaleBand()).xUnits(dc.units.ordinal)
       .brushOn(false)
       .elasticX(true)
@@ -219,14 +243,14 @@ Promise.all([inputpromises[metricsel], inputpromises['Child Population']]).then(
       .renderHorizontalGridLines(true)
       .barPadding(0.1)
       .outerPadding(0.2)
-      .yAxisLabel(metricsel+' Rate')
+      .yAxisLabel(uiconfig.metricsel+' Rate')
       .yAxisPadding('10%')
       .renderLabel(false)
       .turnOnControls()
       .controlsUseVisibility(true)
     ;
     rankchart.yAxis().tickFormat(d3.format(',.2r'));
-    //.xAxisLabel('State')
+    //.xAxisLabel('Region')
     //.width(768)
     //.mouseZoomable(true) // x.invert is not a function?
     //.zoomScale([4,8])
@@ -240,17 +264,18 @@ Promise.all([inputpromises[metricsel], inputpromises['Child Population']]).then(
       .group(xf1grp1filtered)
       .keyAccessor( p => p.key[1] ) // x values
       .valueAccessor(function (p) {
-        p.value.quo = p.value.num / p.value.den;
+        p.value.quo = (p.value.num / p.value.den)*uiconfig.nmonthsperiod ;
         return Math.round(10000 * p.value.quo, 1);
       }) // y values
       .seriesAccessor( p => p.key[0] ) // series values
       .title( p => p.key[0]+', '+date2mon(p.key[1])+'\n10k*'+p.value.num+'/'+p.value.den+'='+Math.round(10000*p.value.quo) )
       .minWidth(500)
       .minHeight(300)
+      .brushOn(false)
       .elasticX(true)
       .elasticY(true)
-      .brushOn(false)
       .renderHorizontalGridLines(true)
+      .renderVerticalGridLines(true)
       .legend(new dc.HtmlLegend().container('#tslegend').horizontal(true).highlightSelected(true))
       .yAxisLabel(rankchart.yAxisLabel())
       .x(
@@ -261,10 +286,11 @@ Promise.all([inputpromises[metricsel], inputpromises['Child Population']]).then(
       .controlsUseVisibility(true)
     ;
     tschart.xAxis().tickFormat(d3.timeFormat('%Y-%b'))
+    tschart.margins().left = rankchart.margins().left ;
 
     // init rankchart filter (selections)
     rankchart.render() ; // to define .filter?
-    rankchart.filter([defaultregionsel]) ;
+    rankchart.filter([uiconfig.defaultregionsel]) ;
 /*
 // test how to modify region filter to require regions before xf1dim1 is modified:
 rankchart.on( 'filtered', function(chart) {
@@ -273,10 +299,10 @@ rankchart.on( 'filtered', function(chart) {
 // it hits this first with unmodified current, then .on above, but it doesn't hit this when a region is removed, so this alone won't work to prevent removal of a selected region:
 //rankchart.addFilterHandler( (current, toadd) => { // toadd.length==1?
 */
-// but this might, yep perfect:
+// but this might? yep, perfect:
 rankchart.removeFilterHandler( (current, toremove) => { // toremove.length==1?
     //console.log( 'rankchart filter handler: current='+current+', toremove='+toremove ) ;
-    if( !('defaultregionsel' in window && defaultregionsel.includes(toremove)) ) {
+    if( !('defaultregionsel' in uiconfig && uiconfig.defaultregionsel.includes(toremove)) ) {
         // ok to remove it, use the dc base-mixin default handler, https://dc-js.github.io/dc.js/docs/html/dc.baseMixin.html#removeFilterHandler
         for (var i = 0; i < current.length; i++) {
             if (current[i] <= toremove && current[i] >= toremove) {
@@ -288,7 +314,8 @@ rankchart.removeFilterHandler( (current, toremove) => { // toremove.length==1?
     return current;
 } ) ;
 
-    dc.renderAll();
+//    rankchart.redraw() ; tschart.render() ; // quicker than dc.renderAll()? no.
+    dc.renderAll() ;
   });
 </script>
 
