@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <title>Dashboard Concept with crossfilter/dc/d3 Test6</title>
+    <link rel="stylesheet" type="text/css" href="https://dc-js.github.io/dc.js/css/dc.css"/>
+    <style>
+        label {
+            white-space: nowrap;
+        }
+        #rankchartdiv .axis.x .tick text {
+            /*http://dc-js.github.io/dc.js/examples/focus-ordinal-bar.html*/
+            text-anchor: end;
+            transform: rotate(-80deg) translate(-1em, -1.3em);
+        }
+        .dc-chart .grid-line line {
+            fill: none;
+            stroke: #ccc;
+            opacity: 0.5;
+            shape-rendering: crispEdges;
+        }
+        .dc-chart .deselected path, .dc-chart .deselected circle {
+          /* prefer just dimming opacity without modifying fill color, how? */
+          fill: inherit ;
+          fill-opacity: 0.1 ;
+        }
+        .yaxislabel {
+            transform: rotate(-90deg) translate(-16em,-6.5em) ;
+        }
+        .xaxislabel {
+            transform: translate(28em,-6em) ;
+        }
+    </style>
+
+  </head>
+
+  <body>
+    <div id="rankchartdiv" style="overflow: auto;">
+        <select class="yaxislabel">
+            <option selected>Family Separation per 10k</option>
+            <option>Family Child-Days per 10k</option>
+        </select>
+        <div class="title">Regions Ranked (Bubble Area ~Child Population)</div>
+        Selected: <span id='rankchartfilter' class="filter">...</span>
+    </div>
+    <select class="xaxislabel">
+        <option selected>Family Child-Days Rate per 10k</option>
+        <option>Family Separation per 10k</option>
+        <option>Sorted Regions</option>
+    </select>
+
+    <div id="ts1chartdiv" xstyle="overflow:auto;">
+        <div class="title">Region Time Series (Click bubbles above to select regions)</div>
+        Selected: <span id='ts1chartfilter' class="filter">...</span>
+        <div id="ts1legend" class="dc-html-legend-container"></div>
+    </div>
+    <div id="ts2chartdiv" xstyle="overflow:auto;">
+        <div id="ts2legend" class="dc-html-legend-container"></div>
+    </div>
+    <p>Running
+    crossfilter.js v<span id="crossfilterversion">?</span>,
+    d3.js v<span id="d3version">?</span>,
+    dc.js v<span id="dcversion">?</span>.
+    </p>
+
+    <script type="text/javascript" src="https://dc-js.github.io/dc.js/js/d3.js" ></script>
+    <script type="text/javascript" src="https://dc-js.github.io/dc.js/js/crossfilter.js" ></script>
+    <script type="text/javascript" src="https://dc-js.github.io/dc.js/js/dc.js" ></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/sugar/2.0.6/sugar.min.js" >// to parse '2009-Oct' </script>
+
+<script type="text/javascript">
+//===========================================================
+// prelims
+dc.config.defaultColors(['#404040'].concat(d3.schemeDark2.concat(['#000080']))) ; // silence warnings, https://github.com/d3/d3-scale-chromatic
+//dc.config.defaultColors(['black','red','green','blue']); // for debug
+//dc.config.defaultColors(['#404040','#3182bd','#6baed6','#9ecae1','#c6dbef','#e6550d','#fd8d3c','#fdae6b','#fdd0a2','#31a354','#74c476','#a1d99b','#c7e9c0','#756bb1','#9e9ac8','#bcbddc','#dadaeb','#636363','#969696','#bdbdbd','#d9d9d9']) ; // black+d3.schemeCategory20c
+d3.selectAll('#crossfilterversion').text(crossfilter.version);
+d3.selectAll('#d3version').text(d3.version);
+d3.selectAll('#dcversion').text(dc.version);
+
+//===========================================================
+// globals
+rankchart = new dc.BubbleChart("#rankchartdiv"),
+ts1chart = new dc.SeriesChart("#ts1chartdiv")
+ts2chart = new dc.SeriesChart("#ts2chartdiv")
+var inputpromises={}, rawcsv, xfdata=null, 
+  xf1, xf1dim1, xf1grp1, xf1grp1filtered, 
+  regions=[], regioncolors={}, x_vert ;
+
+var inputconfig = [ // iterable array of source file info
+  { filename: 'incare_plcdaysmon_NonFamily.csv', longname: 'Child-Days Separated from Family in Foster Care during Month', shortname: 'Family Separation Child-Days', },
+  { filename: 'incare_plcdaysmon_Family.csv', longname: 'Child-Days with Family in Foster Care during Month', shortname: 'Family Child-Days', },
+//  { filename: 'incare_plcdaysmon_NonFamily_Maj.csv', longname: 'Child-Days Majority-Race Separated from Family in Foster Care during Month', shortname: 'Majority-Race Separation Child-Days', },
+//  { filename: 'incare_plcdaysmon_NonFamily_NonMaj.csv', longname: 'Child-Days NonMajority-Race Separated from Family in Foster Care during Month', shortname: 'NonMajority-Race Separation Child-Days', },
+  { filename: 'incare_plcdaysmon.csv', longname: 'Child-Days in Foster Care during Month', shortname: 'Placement Child-Days', },
+  { filename: 'incare_monthly.csv', longname: 'In Foster Care Last Day of Month', shortname: 'In Care', },
+  { filename: 'removals_monthly.csv', longname: 'Removals to Foster Care during Month', shortname: 'Removals', },
+  { filename: 'incare_popkids.csv', longname: 'Children in the Population', shortname: 'Child Population', },
+];
+
+/**/
+var uiconfig = {
+    csvdir: 'https://raw.githubusercontent.com/loghlr/DashTest1/main/',
+//    csvdir: 'http://localhost/fci/poc6/',
+    sitename: '51 US States',
+//    metricsel1: inputconfig[0].shortname, metricsel2: 'Removals',
+    metricsel1: 'Family Separation Child-Days', metricsel2: 'Family Child-Days',
+//    metricsel1: 'Family Separation Child-Days', metricsel2: 'Placement Child-Days',
+    datesel: [new Date('4/1/2019').valueOf(), new Date('3/31/2020').valueOf()],
+    nmonthsperiod: 12, // breaks with incare?
+    ratemultiplier1: 10000, ratemultiplier2: 10000,
+//    metricsel2: 'In Care', datesel: [new Date('3/1/2020').valueOf(), new Date('3/31/2020').valueOf()], nmonthsperiod: 1, ratemultiplier2: 10000, 
+    defaultregionsel: ['sitename'],
+} ;
+
+/*
+var uiconfig = {
+    csvdir: 'https://fosteringcourtimprovement.org/ga/County/',
+    sitename: '159 GA Counties',
+    metricsel1: inputconfig[0].shortname,
+    metricsel2: 'Removals',
+    //datesel: [new Date('10/1/2021'), new Date('9/30/2022')],
+    datesel: [new Date('10/1/2021').valueOf(), new Date('9/30/2022').valueOf()],
+    nmonthsperiod: 12,
+    ratemultiplier1: 10000,
+    ratemultiplier2: 10000,
+    defaultregionsel: ['sitename'],
+} ;
+*/
+/*
+var uiconfig = {
+    csvdir: 'https://fosteringcourtimprovement.org/vt/County/',
+    sitename: '15 VT Counties',
+    metricsel1: inputconfig[0].shortname,
+    metricsel2: 'Removals',
+    //datesel: [new Date('10/1/2021'), new Date('9/30/2022')],
+    datesel: [new Date('10/1/2021').valueOf(), new Date('9/30/2022').valueOf()],
+    nmonthsperiod: 12,
+    ratemultiplier1: 10000,
+    ratemultiplier2: 10000,
+    defaultregionsel: ['sitename'],
+} ;
+*/
+uiconfig.defaultregionsel[0] = uiconfig.sitename ; // better way to set default region selection?
+
+//===========================================================
+// utils
+Array.prototype.unique = function () { return [...new Set(this)] ; }
+Array.prototype.includesall = function (ar2) { return this.length > 0 && this.every( v => ar2.includes(v) ); }
+// d3/dc monthly unit date axis ticks appear to align with the end of the month, so use 28th.
+var str2date = s => Sugar.Date.create(s.replace(/^(\d{4})\D?(\d{2})$/, '$2/28/$1')) ;
+var mon2date = (new Date('2009-Oct-28').valueOf()) ? m => new Date(m + '-28') : m => Sugar.Date.create(m + '-28') ; // Date('2009-Oct-15') invalid in Firefox, but Sugar.Date.create doubles load time
+var date2mon = d3.timeFormat('%Y-%b') ;
+//var date2mon = d => d.map( v => d3.timeFormat('%Y-%b')(v) ) ;
+var dayspermon = function(mon) {
+  var d = mon2date(mon) ;
+  //var i = Array(12).fill().map( (e,i) => i++ ) ;
+  var n = new Date( d.getFullYear(), d.getMonth()+1, 0 ).getDate() ;
+  return( n ) ;
+} //dayspermon('2012-Oct')
+
+/* Multidimensional crossfilter datasets are built up by joining multiple tables from FCI files. First, reshape FCI (FosteringCourtImprovement.org) static CSV files (numerators & denominators for 140+ metrics, each file is CSV of counts per month x region), then join to crossfilter's linear array of objects with month+region identifying unique rows and numerators, denominators and metadata (columns) making up each row object. 
+*/
+function fci2xf( raw, colname, xftemplate=null ) {
+//raw=rawcsv; colname='PopKids'; xftemplate=null
+//raw=rawcsv; colname='Child Population'; xftemplate=xfdata.Removals
+  let ir = 0, // index into reshaped crossfilter dataset rows
+      df1 = xftemplate ? Object.assign( [], xftemplate ) // make a copy of xftemplate, or
+          : Array( raw.length * (Object.keys(raw[0]).length-1) ) // new xf array, might preallocate
+  ;
+  raw.forEach( ro => { // row object loop
+      let dv, dt, dm ;
+      Object.entries(ro).forEach( (kv,ic) => { // column loop: region, count, index
+//ro=raw[0]; ic=0; kv=Object.entries(ro)[0] ;
+//ro=raw[0]; ic=0; kv=Object.entries(ro)[1] ;
+          let [region,value] = kv ; // support?
+          region = region.replace( /^(Statewide|National)$/i, uiconfig.sitename ) ;
+          if( ic == 0 ) { // first column is a month|date used in join, so keep consistent
+              dv = value ; dt = str2date( value ) ; dm = date2mon(dt) ; // store for next columns
+              return ;
+          } else {
+              let ro2 = df1[ir] || { Month: dm, Region: region, Midmonth: mon2date(dm), NDays: dayspermon(dm) } ;
+              if( df1[ir] && (dm != df1[ir].Month || region != df1[ir].Region) ) {
+                  // assert FCI files all cover same months & regions in same order for now.
+                  console.log(`month/region mismatch: ${colname}, ${region}, ${ir}, ${ic}`);
+                  throw new Error( 'month/region mismatch' ) ;
+              }
+              ro2[colname] = value ;
+              if( dv.replace(/\d/g, '').length == 2 ) { // 2 date delimiters => fully-formed date, append to ro2
+                  ro2[colname+' Date'] = dt ;
+              }
+              df1[ir++] = ro2 ;
+          }
+      } ) ;
+  } ) ;
+  console.assert( ir == df1.length, `${colname} rows differ from df1: ${ir} vs df1=${df1.length}` ) ;
+  if( xftemplate ) console.assert( ir == xftemplate.length, `${colname} rows differ from template: ${ir} vs template=${xftemplate.length}` ) ;
+  // do something? delete rows? dummy values in rows?
+
+  return( df1 ) ;
+}
+//x=fci2xf( rawcsv, 'PopKids' )
+//x=fci2xf( rawcsv, 'Child Population', xfdata )
+
+//===========================================================
+// ui
+d3.selectAll('#crossfilterversion').text(crossfilter.version);
+d3.selectAll('#d3version').text(d3.version);
+d3.selectAll('#dcversion').text(dc.version);
+
+// need to fulfill at least 2 promises before we can do anything: incare_popkids, incare_monthly
+// create promises for file downloads:
+inputconfig.forEach( (o) => {
+  inputpromises[o.shortname] = d3.csv(uiconfig.csvdir+o.filename, d3.autoType).then( (csvrecords) => {
+    rawcsv = csvrecords ;
+    xfdata = fci2xf( rawcsv, o.shortname, xfdata ) ;
+    console.log( o.shortname+': '+csvrecords.length+' x '+Object.keys(csvrecords[0]).length+' => '+xfdata.length+' x '+Object.keys(xfdata[0]) );
+    // check marginals as promises are fulfilled ...
+    //checkmarginals( o.filename, rawcsv, xfdata ) ;
+
+  } ).catch((err) => alert('File Read Error '+o.filename+':'+err));
+} ) ;
+console.log('Promises: '+Object.keys(inputpromises));
+
+// paint charts as promises are fulfilled ...
+Promise.all([inputpromises[uiconfig.metricsel1], inputpromises[uiconfig.metricsel2], inputpromises['Child Population']]).then( o => {
+  //console.log(o); // nothing in it?
+  console.log('Dimensions for charts: '+Object.keys(xfdata[0]));
+
+    if( regions.length == 0 ) {
+      regions = xfdata.map( o => o.Region ).filter( (v,i,a) => a.indexOf(v) === i ).sort() // unique regions, alpha sort so "51 US States" first
+      let cols = dc.config.defaultColors() ;
+      // map from regions to colors, recycling with slightly different luminance
+      regions.forEach( (v,i) => regioncolors[v] = (i < cols.length) ? cols[i] : d3.rgb(cols[i % cols.length]).darker(2*(Math.random()-0.5)).hex() ) ; // could detect & correct collisions
+    }
+
+    xf1 = crossfilter(xfdata);
+
+    // region+date dimension for the time series chart
+    // composite/series charts are effectively 3D (x, y, series), so "dimension" is a 2D (2 keys) object. these will be "keys" for the chart abscissa and series legend:
+    xf1dim1 = xf1.dimension( d => [d.Region, d.Midmonth] ); // mon2date(d.Month) slow here
+    // need custom "group" .reduce() functions for the ordinate (y values) because they're numerator/denominator=quotient rates, not simple sums of counts: https://stackoverflow.com/questions/43000194/clicking-on-rowchart-dc-js-changes-the-percentage, https://jsfiddle.net/gordonwoodhull/5xc9rh4f/1/
+    function reduceAdd(acc, d, num1metric, num2metric=false, denmetric='Child Population') {
+      // filtering here won't work: series legend shows all regions, including zeros
+      // scale monthly totals to 30-day months? preprocessing?
+      acc.num1 += d[num1metric]*(uiconfig.nmonthsperiod > 1 ? 30/d['NDays'] : 1) ;
+      if( num2metric ) acc.num2 += d[num2metric]*(uiconfig.nmonthsperiod > 1 ? 30/d['NDays'] : 1) ;
+      acc.den += d[denmetric] ;
+      return acc;
+    }
+    function reduceRemove(acc, d, num1metric, num2metric=false, denmetric='Child Population') {
+      acc.num1 -= d[num1metric]*(uiconfig.nmonthsperiod > 1 ? 30/d['NDays'] : 1) ;
+      if( num2metric ) acc.num2 -= d[num2metric]*(uiconfig.nmonthsperiod > 1 ? 30/d['NDays'] : 1) ;
+      acc.den -= d[denmetric] ;
+      return acc;
+    }
+    function reduceInitial() {
+      return { num1: 0, num2: 0, den: 0 };
+    }
+    xf1grp1 = xf1dim1.group() ;
+    //xf1grp1.reduce( (acc,d) => reduceAdd(acc,d,uiconfig.metricsel1), (acc,d) => reduceRemove(acc,d,uiconfig.metricsel1), reduceInitial);
+    xf1grp1.reduce( (acc,d) => reduceAdd(acc,d,uiconfig.metricsel1,uiconfig.metricsel2), (acc,d) => reduceRemove(acc,d,uiconfig.metricsel1,uiconfig.metricsel2), reduceInitial);
+    // filter this group to rankchart.filters() regions so that the series machinery (legend) works
+    // https://github.com/dc-js/dc.js/wiki/FAQ
+    function filter_bins(source_group) { 
+        return {
+            all:function () {
+                return source_group.all().filter(function(d) {
+                    return rankchart.filters() && rankchart.filters().includes(d.key[0]) ? d.value : null ;
+                });
+            }
+        };
+    }
+    xf1grp1filtered = filter_bins(xf1grp1) ; // use in time series chart to match rankchart region selections
+
+    // region only dimension, no dates for the ranked bar chart
+    xf1dim2 = xf1.dimension( d => d.Region );
+    //xf1grp2 = xf1dim2.group().reduce(reduceAdd, reduceRemove, reduceInitial);
+    xf1grp2 = xf1dim2.group() ;
+    xf1grp2.reduce( (acc,d) => reduceAdd(acc,d,uiconfig.metricsel1,uiconfig.metricsel2), (acc,d) => reduceRemove(acc,d,uiconfig.metricsel1,uiconfig.metricsel2), reduceInitial);
+    // filter all other xf1 dimensions, not xf1dim1, https://github.com/square/crossfilter/issues/161
+    // super confusing, but works: xf1dim1.filterFunction applies to xf1dim2 only!, not charts that use xf1dim1
+    xf1dim1.filterFunction( function(k) {
+        // k is key from xf1dim1 (not xf1dim2), so [region, date]
+//        return( date2mon(k[1]) == date2mon(uiconfig.datesel) ) ; // single month, global datesel for now
+        // k[1] should be a date, may be expensive comparison. any way to make it numeric?
+//        let ret = k !== undefined && k[1] >= uiconfig.datesel[0] && k[1] <= uiconfig.datesel[1] ;
+        if( k === undefined ) {
+            return( false ) ;
+        } else {
+            let val1 = k[1].valueOf() ;
+            return( val1 >= uiconfig.datesel[0] && val1 <= uiconfig.datesel[1] ) ;
+        }
+//        if( ret ) { console.log( 'date filterFunction, k=', k ) ; }
+//        return( ret ) ;
+    } ) ;
+
+    let maxradiusvalue = d3.quantile( xf1grp2.all(), 0.95, r => r.value.den ) ; // clamp at 95th percentile
+    let medkidpop = d3.median( xf1grp2.all(), p => /^[0-9]+ [A-Z]{2}/.test(p.key) ? null : p.value.den/uiconfig.nmonthsperiod )
+    // scaleBand isn't right for bubbleCharts, but coord mixin _prepareXAxis requires .padding(Inner|Outer), so add stubs and it works:
+    let rankchartxscale = d3.scalePoint() ; // https://github.com/d3/d3-scale/blob/main/README.md#point-scales
+    rankchartxscale.paddingInner = rankchartxscale.paddingOuter = function(p) { return this ; } ;
+    rankchartxscale.padding(1.5) ; // from yaxis, make room for labels
+
+    rankchart
+      .dimension(xf1dim2)
+      .group(xf1grp2)
+      .valueAccessor(function (p) { // y values
+        p.value.quo = (p.value.num1 / Math.max(0.1,p.value.den))*uiconfig.nmonthsperiod ;
+        return Math.round(uiconfig.ratemultiplier1 * p.value.quo, 1);
+      })
+      .keyAccessor(function (p) { // x values
+        p.value.quo = (p.value.num2 / Math.max(0.1,p.value.den))*uiconfig.nmonthsperiod ;
+        return Math.round(uiconfig.ratemultiplier2 * p.value.quo, 1);
+      })
+      .radiusValueAccessor(function (p) {
+        //console.log(p)
+        let pop = /^[0-9]+ [A-Z]{2}/.test(p.key) ? medkidpop : p.value.den/uiconfig.nmonthsperiod ;
+        return Math.sqrt( pop / Math.PI ) ;
+        //return Math.min(maxradiusvalue, p.value.den/uiconfig.nmonthsperiod) ;
+      })
+      //.r( d3.scaleLinear().domain([1, 10]) ) // no effect?
+      .maxBubbleRelativeSize(0.03) // use formula below post-render
+      .minRadius(3) // use formula below post-render
+      .minRadiusWithLabel(0) // label any selected
+      .elasticRadius(true)
+      .colorAccessor( p => {
+          return p.key ;
+      } )
+      //.colors( r => regioncolors[r] )
+      .colors( r => {
+          return regioncolors[r] ;
+      } )
+      //.calculateColorDomain() // don't, conflicts with colorAccessor()
+      //.ordering((r) => -r.value.quo)
+      .minWidth(500)
+      .minHeight(400)
+      .margins({ left: 55, top: 10, right: 10, bottom: 100 })
+      //.x(rankchartxscale).xUnits(dc.units.ordinal) // d3.scaleBand misaligns ticks
+      .x(d3.scaleLinear())
+      .brushOn(false) // not in bubblechart?
+      .elasticX(true)
+      .elasticY(true)
+      .renderHorizontalGridLines(true)
+      //.renderVerticalGridLines(true) // tick alignment debug
+      //.barPadding(0.1)
+      //.outerPadding(0.2)
+      .yAxisLabel(uiconfig.metricsel1.replace(/s$/,'')+' Rate per '+uiconfig.ratemultiplier1/1000+'k', 12+3)
+      .xAxisLabel(uiconfig.metricsel2.replace(/s$/,'')+' Rate per '+uiconfig.ratemultiplier2/1000+'k', 12+3)
+      .yAxisPadding('25%')
+      .xAxisPadding('5%')
+      .renderLabel(true)
+      .turnOnControls()
+      .controlsUseVisibility(true)
+      .title(function (p) {
+        return p.key+' kidpop='+Math.round(p.value.den/uiconfig.nmonthsperiod) ;
+      })
+      //.mouseZoomable(true) // triggers range filter, need handler?
+    ;
+    rankchart.yAxis().tickFormat(d3.format(',.2r'));
+    //.xAxisLabel('Region')
+    //.width(768)
+    //.zoomScale([4,8])
+    //.xAxis().orient('top')
+    //.controlsUseVisibility(true)
+    //nothing: rankchart.xAxis().tickArguments([{orient: 'top'}]) ;
+
+    ts1chart
+      .dimension(xf1dim1) // ignores xf1dim1.filterFunction() for latest date
+      .group(xf1grp1filtered)
+      .seriesAccessor( p => p.key[0] ) // series values
+      .keyAccessor( p => p.key[1] ) // x values
+      .valueAccessor(function (p) {
+        p.value.quo = (p.value.num1 / p.value.den)*uiconfig.nmonthsperiod ;
+        return Math.round(uiconfig.ratemultiplier1 * p.value.quo, 1);
+      }) // y values
+      .title( p => p.key[0]+', '+date2mon(p.key[1])+'\n'+uiconfig.ratemultiplier1/1000+'k*'+Math.round(p.value.num1)+'/'+Math.round(p.value.den)+'='+Math.round(uiconfig.ratemultiplier1*p.value.quo) )
+      .minWidth(500)
+      .minHeight(250)
+      .brushOn(false)
+      .elasticX(true)
+      .elasticY(true)
+      .renderHorizontalGridLines(true)
+      .renderVerticalGridLines(true)
+      .legend(new dc.HtmlLegend().container('#ts1legend').horizontal(true).highlightSelected(true))
+      .colors( rankchart.colors() )
+      .yAxisLabel(rankchart.yAxisLabel(), 12+3) // get rankchart._yAxisLabelPadding?
+      .yAxisPadding(rankchart.yAxisPadding())
+      .x(
+        d3.scaleUtc() // scaleTime is local
+          .domain(['2009-10-01', '2020-03-31'].map((d) => new Date(d)))
+      ).xUnits(d3.timeMonth)
+      .turnOnControls()
+      //.renderDataPoints(true) // not a function of series chart?
+      .controlsUseVisibility(true)
+    ;
+    ts1chart.xAxis().tickFormat(d3.timeFormat('%Y-%b'))
+    ts1chart.margins().left = rankchart.margins().left ;
+
+    ts2chart
+      .dimension(xf1dim1) // ignores xf1dim1.filterFunction() for latest date
+      .group(xf1grp1filtered)
+      .seriesAccessor(ts1chart.seriesAccessor()) // series values
+      .keyAccessor(ts1chart.keyAccessor()) // x values
+      .valueAccessor(function (p) {
+        p.value.quo = (p.value.num2 / p.value.den)*uiconfig.nmonthsperiod ;
+        return Math.round(uiconfig.ratemultiplier2 * p.value.quo, 1);
+      }) // y values
+      .title( p => p.key[0]+', '+date2mon(p.key[1])+'\n'+uiconfig.ratemultiplier2/1000+'k*'+Math.round(p.value.num2)+'/'+Math.round(p.value.den)+'='+Math.round(uiconfig.ratemultiplier2*p.value.quo) )
+      .minWidth(ts1chart.minWidth())
+      .minHeight(ts1chart.minHeight())
+      .brushOn(false)
+      .elasticX(true)
+      .elasticY(true)
+      .renderHorizontalGridLines(true)
+      .renderVerticalGridLines(true)
+      .legend(new dc.HtmlLegend().container('#ts2legend').horizontal(true).highlightSelected(true))
+      .colors( rankchart.colors() )
+      .yAxisLabel(rankchart.xAxisLabel(), 12+3) // get rankchart._yAxisLabelPadding?
+      .yAxisPadding(rankchart.yAxisPadding())
+      .x(
+        d3.scaleUtc() // scaleTime is local
+          .domain(['2009-10-01', '2020-03-31'].map((d) => new Date(d)))
+      ).xUnits(d3.timeMonth)
+      .turnOnControls()
+      //.renderDataPoints(true) // not a function of series chart?
+      .controlsUseVisibility(true)
+    ;
+    ts2chart.xAxis().tickFormat(d3.timeFormat('%Y-%b'))
+    ts2chart.margins().left = rankchart.margins().left ;
+
+    // init rankchart filter (selections)
+    rankchart.render() ; // to define .filter? should do all below in rankchart.on('post-render', c => ...)
+    rankchart.filter([uiconfig.defaultregionsel]) ;
+/*
+// test how to modify region filter to require regions before xf1dim1 is modified:
+rankchart.on( 'filtered', function(chart) {
+    console.log( 'rankchart filtered: '+chart.filters()+'. ts1chart children='+ts1chart.children().length ) ;
+} ) ;
+// it hits this first with unmodified current, then .on above, but it doesn't hit this when a region is removed, so this alone won't work to prevent removal of a selected region:
+//rankchart.addFilterHandler( (current, toadd) => { // toadd.length==1?
+*/
+// but this might? yep, perfect: use the dc base-mixin default handler, https://dc-js.github.io/dc.js/docs/html/dc.baseMixin.html#removeFilterHandler
+rankchart.removeFilterHandler( (current, toremove) => { // toremove.length==1?
+    //console.log( 'rankchart filter handler: current='+current+', toremove='+toremove ) ;
+    if(!( 'defaultregionsel' in uiconfig && uiconfig.defaultregionsel.includes(toremove) )) { // not in defaults, ok to remove it
+        for (var i = 0; i < current.length; i++) {
+            if (current[i] <= toremove && current[i] >= toremove) {
+                current.splice(i, 1); // removes ith element
+                break;
+            }
+        }
+    }
+    return current;
+} ) ;
+// set bubble radius based on pixel length & tick-count of xAxis?:
+/*
+rankchart.minRadius( Math.min(3,0.2*rankchart.xAxisLength() / rankchart.xAxis().scale().domain().length) ) ;
+rankchart.maxBubbleRelativeSize( (40*0.02) / rankchart.xAxis().scale().domain().length ) // large range => large bubbles cover others
+//console.log( 'bubble min,max='+[Math.round(rankchart.rMin()),Math.round(rankchart.rMax())] )
+*/
+rankchart.minWidth( 6*rankchart.xAxis().scale().domain().length + rankchart.margins().left + rankchart.margins().right ) ; // 160 ~= 1200
+ts1chart.minWidth( rankchart.minWidth() ) ;
+ts2chart.minWidth( ts1chart.minWidth() ) ;
+
+// draw vertical date line on click?: https://dc-js.github.io/dc.js/examples/click-limit-on-histogram.html
+ts1chart.on('pretransition', function(chart) {
+        chart.svg().on('click', function(event) {
+            var bound = chart.root().node().getBoundingClientRect();
+            x_vert = chart.x().invert(event.clientX - bound.left - chart.margins().left);
+            console.log('clicked', x_vert);
+            chart.redraw();
+        });
+
+        // draw a line if x_vert is set
+        var extra_data = x_vert !== undefined ? [
+            {x: chart.x()(x_vert) + chart.margins().left, y: chart.margins().top},
+            {x: chart.x()(x_vert) + chart.margins().left, y: chart.margins().top + chart.effectiveHeight()}
+        ] : [];
+        var line = d3.line()
+            .x(function(d) { return d.x; })
+            .y(function(d) { return d.y; })
+            .curve(d3.curveLinear);
+        var chartBody = chart.select('g');
+        var path = chartBody.selectAll('path.extra').data([extra_data]);
+        path = path.enter()
+                .append('path')
+                .attr('class', 'extra')
+                .attr('stroke', 'darkred')
+                .attr('id', 'oeLine')
+                .attr("stroke-width", 1)
+                .style("stroke-dasharray", ("10,3"))
+            .merge(path);
+        path.attr('d', line);
+    });
+
+//    rankchart.redraw() ; ts1chart.render() ; // quicker than dc.renderAll()? no.
+    dc.renderAll() ;
+  });
+</script>
+
+  </body>
+</html>
+
